@@ -181,3 +181,23 @@ export async function downloadExtractAndFindFile(
     throw error;
   }
 }
+
+/**
+ * Ensures a directory exists, creating it if necessary
+ */
+export function ensureDirectory(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+/**
+ * Generates a timestamped filename
+ */
+export function generateTimestampedFilename(
+  prefix: string,
+  extension: string,
+): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${prefix}-${timestamp}.${extension}`;
+}

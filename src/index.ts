@@ -9,6 +9,7 @@ import listWebhooksCommand from './commands/list-webhooks.js';
 import listTeamMembersCommand from './commands/list-team-members.js';
 import codespacesUsageCommand from './commands/codespaces-usage.js';
 import getMigrationExportStatusCommand from './commands/migration-export-status.js';
+import listRepoSecretScanAlertsCommand from './commands/list-repo-secret-scan-alerts.js';
 
 const program = createProgram({
   name: 'octokit-sandbox',
@@ -23,6 +24,7 @@ const program = createProgram({
     listTeamMembersCommand,
     codespacesUsageCommand,
     getMigrationExportStatusCommand,
+    listRepoSecretScanAlertsCommand,
   ],
 });
 
