@@ -130,6 +130,19 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "list-repo-secret-scan-alerts",
+      "skipFiles": ["<node_internals>/**"],
+      "runtimeExecutable": "tsx",
+      "program": "${workspaceFolder}/src/index.ts",
+      "args": ["list-repo-secret-scan-alerts"],
+      "sourceMaps": true,
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen"
     }
   ]
 }
