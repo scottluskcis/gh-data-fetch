@@ -2,7 +2,10 @@ import {
   createCommandWithSharedOptions,
   parseRepoListOption,
 } from '../commands/command-helpers.js';
-import { listAlertsForRepos } from '../api/secret-scanning/secret-scanning-alerts.js';
+import {
+  listAlertsForRepos,
+  listAlertsForOrg,
+} from '../api/secret-scanning/secret-scanning-alerts.js';
 import { executeWithOctokit } from '@scottluskcis/octokit-harness';
 import { Option } from 'commander';
 import * as fs from 'fs';
@@ -17,11 +20,22 @@ import { ensureDirectory, generateTimestampedFilename } from '../utils/file.js';
 const listAlertsForReposCommand = createCommandWithSharedOptions(
   'list-repo-secret-scan-alerts',
 )
-  .description('List secret scanning alerts for specified repositories')
+  .description(
+    'List secret scanning alerts for specified repositories or organization',
+  )
+  .addOption(
+    new Option(
+      '--scan-type <type>',
+      'Type of scan: "repo" for repositories or "org" for organization',
+    )
+      .env('SCAN_TYPE')
+      .choices(['repo', 'org'])
+      .default('repo'),
+  )
   .addOption(
     new Option(
       '--repos <repos...>',
-      'Comma separated list of repositories in the format owner/repo',
+      'Comma separated list of repositories in the format owner/repo (for repo scan type)',
     )
       .env('REPOS')
       .argParser(parseRepoListOption),
@@ -62,18 +76,20 @@ const listAlertsForReposCommand = createCommandWithSharedOptions(
     ).env('IS_MULTI_REPO'),
   )
   .addOption(
-    new Option('--hide-secret', 'Hide the actual secret value in output').env(
-      'HIDE_SECRET',
-    ),
+    new Option('--hide-secret', 'Hide the actual secret value in output')
+      .env('HIDE_SECRET')
+      .default(true),
   )
   .action(async (options) => handleAction(options));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseArgs(options: any) {
+  const scanType = options.scanType || 'repo';
   let repoList = options.repos;
 
   // If no repos option is provided but repoList (file path) exists, read repos from file
-  if (!repoList && options.repoList) {
+  // Only applicable for 'repo' scan type
+  if (scanType === 'repo' && !repoList && options.repoList) {
     const fileContent = fs.readFileSync(options.repoList, 'utf8');
     const lines = fileContent
       .split('\n')
@@ -88,6 +104,8 @@ function parseArgs(options: any) {
   }
 
   const opts = {
+    scanType,
+    org: options.orgName,
     owner: options.orgName,
     repo: undefined,
     repos: repoList,
@@ -108,37 +126,63 @@ function parseArgs(options: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleAction(options: any) {
   await executeWithOctokit(options, async ({ octokit, logger }) => {
-    logger.info('Starting to list secret scanning alerts...');
-
     const opts = {
       octokit,
       ...parseArgs(options),
     };
 
+    const scanType = opts.scanType;
+
+    // Validate inputs based on scan type
+    if (scanType === 'repo' && (!opts.repos || opts.repos.length === 0)) {
+      logger.error(
+        'Error: --repos option or --repo-list file is required for repo scan type',
+      );
+      process.exit(1);
+    }
+
+    if (scanType === 'org' && !opts.org) {
+      logger.error('Error: --org-name option is required for org scan type');
+      process.exit(1);
+    }
+
+    logger.info(
+      `Starting to list secret scanning alerts (${scanType} mode)...`,
+    );
+
     // Set up output directory and file path
     const outputDir = path.join(process.cwd(), 'output');
     ensureDirectory(outputDir);
 
-    // Use provided output filename or generate a default timestamped one
+    // Use provided output filename or generate a default timestamped one with scan type
     const filename =
       opts.outputFileName ||
-      generateTimestampedFilename('secret-scanning-alerts', 'csv');
+      generateTimestampedFilename(`secret-scanning-alerts-${scanType}`, 'csv');
     const csvFilePath = path.join(outputDir, filename);
 
     let headers: string[] = [];
     let isFirstAlert = true;
 
-    for await (const alert of listAlertsForRepos({ ...opts })) {
+    // Choose the appropriate function based on scan type
+    const alertIterator =
+      scanType === 'org'
+        ? listAlertsForOrg({ ...opts })
+        : listAlertsForRepos({ ...opts });
+
+    for await (const alert of alertIterator) {
       // On first alert, extract headers and initialize CSV file
       if (isFirstAlert) {
-        headers = extractHeaders(alert);
+        // Add scanType to the alert object for CSV output
+        const alertWithType = { scanType, ...alert };
+        headers = extractHeaders(alertWithType);
         initializeCsvFile(csvFilePath, headers);
         isFirstAlert = false;
         logger.info(`Initialized CSV file: ${csvFilePath}`);
       }
 
-      // Append alert to CSV file
-      appendRecordToCsv(csvFilePath, alert, headers);
+      // Append alert to CSV file with scanType included
+      const alertWithType = { scanType, ...alert };
+      appendRecordToCsv(csvFilePath, alertWithType, headers);
     }
 
     if (isFirstAlert) {

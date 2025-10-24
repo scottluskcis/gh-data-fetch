@@ -19,6 +19,19 @@ export type SecretScanningAlertOptions = {
   hide_secret: boolean | undefined;
 };
 
+export type SecretScanningAlertOrgOptions = {
+  org: string;
+  state: 'open' | 'resolved' | undefined;
+  secret_type: string | undefined;
+  resolution: string | undefined;
+  validity: string | undefined;
+  page: number;
+  per_page: number;
+  is_publicly_leaked: boolean | undefined;
+  is_multi_repo: boolean | undefined;
+  hide_secret: boolean | undefined;
+};
+
 export async function* listAlertsForRepo({
   octokit,
   owner,
@@ -115,6 +128,55 @@ export async function* listAlertsForRepos({
       hide_secret,
     })) {
       yield { ...alert, owner, repo };
+    }
+  }
+}
+
+export async function* listAlertsForOrg({
+  octokit,
+  org,
+  state,
+  secret_type,
+  resolution,
+  validity,
+  page = 1,
+  per_page = 30,
+  is_publicly_leaked = false,
+  is_multi_repo = false,
+  hide_secret = false,
+}: {
+  octokit: Octokit;
+} & SecretScanningAlertOrgOptions): AsyncGenerator<
+  SecretScanningAlert,
+  void,
+  unknown
+> {
+  if (!octokit) {
+    throw new Error('Octokit instance is required');
+  }
+  if (!org) {
+    throw new Error('Organization is required');
+  }
+
+  const iterator = octokit.paginate.iterator(
+    octokit.rest.secretScanning.listAlertsForOrg,
+    {
+      org,
+      state,
+      secret_type,
+      resolution,
+      validity,
+      is_publicly_leaked,
+      per_page: per_page,
+      page: page,
+      is_multi_repo,
+      hide_secret,
+    },
+  );
+
+  for await (const { data: alerts } of iterator) {
+    for (const alert of alerts) {
+      yield alert;
     }
   }
 }
