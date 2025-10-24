@@ -42,8 +42,8 @@ export async function* listAlertsForRepo({
   validity,
   page = 1,
   per_page = 30,
-  is_publicly_leaked = false,
-  is_multi_repo = false,
+  is_publicly_leaked = undefined,
+  is_multi_repo = undefined,
   hide_secret = false,
 }: {
   octokit: Octokit;
@@ -95,8 +95,8 @@ export async function* listAlertsForRepos({
   validity,
   page = 1,
   per_page = 30,
-  is_publicly_leaked = false,
-  is_multi_repo = false,
+  is_publicly_leaked = undefined,
+  is_multi_repo = undefined,
   hide_secret = false,
 }: {
   octokit: Octokit;
@@ -141,8 +141,8 @@ export async function* listAlertsForOrg({
   validity,
   page = 1,
   per_page = 30,
-  is_publicly_leaked = false,
-  is_multi_repo = false,
+  is_publicly_leaked = undefined,
+  is_multi_repo = undefined,
   hide_secret = false,
 }: {
   octokit: Octokit;
