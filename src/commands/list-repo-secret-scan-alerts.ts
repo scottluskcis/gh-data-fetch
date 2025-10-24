@@ -155,9 +155,9 @@ async function handleAction(options: any) {
     ensureDirectory(outputDir);
 
     // Use provided output filename or generate a default timestamped one with scan type
+    const baseFilename = `secret-scanning-alerts-${scanType}${opts.is_publicly_leaked ? '-publicly-leaked' : ''}`;
     const filename =
-      opts.outputFileName ||
-      generateTimestampedFilename(`secret-scanning-alerts-${scanType}`, 'csv');
+      opts.outputFileName || generateTimestampedFilename(baseFilename, 'csv');
     const csvFilePath = path.join(outputDir, filename);
 
     let headers: string[] = [];
