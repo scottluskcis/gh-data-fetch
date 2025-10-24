@@ -3,7 +3,7 @@ import {
   executeWithOctokit,
 } from '@scottluskcis/octokit-harness';
 
-import { Octokit, PageInfoForward } from 'octokit';
+import { Octokit } from 'octokit';
 
 import fs from 'fs';
 import path from 'path';
