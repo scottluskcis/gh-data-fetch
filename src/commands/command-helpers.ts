@@ -37,6 +37,12 @@ export function withSharedOptions(cmd: Command): Command {
         ).env('ORG_NAME'),
       )
       .addOption(
+        new Option(
+          '-e, --enterprise-name <enterprise>',
+          'The name of the enterprise to process',
+        ).env('ENTERPRISE_NAME'),
+      )
+      .addOption(
         new Option('-t, --access-token <token>', 'GitHub access token').env(
           'ACCESS_TOKEN',
         ),
