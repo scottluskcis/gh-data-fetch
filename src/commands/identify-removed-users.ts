@@ -31,6 +31,12 @@ const identifyRemovedUsersCommand = createCommandWithSharedOptions(
       'End date (ISO format) to filter audit log events to',
     ).env('CREATED_END'),
   )
+  .addOption(
+    new Option(
+      '--actor-filter <actors>',
+      'Comma-separated list of actors whose removals should be considered for restoration',
+    ).env('ACTOR_FILTER'),
+  )
   .action(async (options) => handleAction(options));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,6 +67,15 @@ function parseArgs(options: any) {
     created.push(`<${options.createdEnd}`);
   }
 
+  // Parse actor filter
+  let actorFilter: string[] | undefined = undefined;
+  if (options.actorFilter) {
+    actorFilter = options.actorFilter
+      .split(',')
+      .map((actor: string) => actor.trim())
+      .filter((actor: string) => actor.length > 0);
+  }
+
   return {
     org: options.orgName,
     owner: options.orgName,
@@ -71,6 +86,7 @@ function parseArgs(options: any) {
     createdEnd: options.createdEnd,
     created: created.length > 0 ? created : undefined,
     outputFileName: options.outputFileName,
+    actorFilter: actorFilter,
   };
 }
 
@@ -138,6 +154,17 @@ async function handleAction(options: any) {
 
     logger.info(memberLookup.size + ' members found added.');
 
+    // Track all removal events by user:repo for subsequent activity detection
+    const removalEvents = new Map<
+      string,
+      Array<{
+        actor: string;
+        timestamp: number;
+        removed_at: string;
+        created_at: string;
+      }>
+    >();
+
     // Set up output directory and file path
     const outputDir = path.join(process.cwd(), 'output');
     ensureDirectory(outputDir);
@@ -165,9 +192,20 @@ async function handleAction(options: any) {
       'orig_actor',
       'orig_document_id',
       'orig_request_id',
+      'should_restore',
+      'subsequent_activity',
+      'subsequent_activity_actor',
+      'subsequent_activity_timestamp',
     ];
 
     initializeCsvFile(csvFilePath, headers);
+
+    // First pass: collect all removal events
+    const allRemovalEvents: Array<{
+      event: any;
+      existing: any;
+      existingInfo: any;
+    }> = [];
 
     // get the remove events for date
     const removeMemberIterator = getAuditLogActivity({
@@ -185,8 +223,95 @@ async function handleAction(options: any) {
     for await (const event of removeMemberIterator) {
       logger.info(JSON.stringify(event));
 
-      const existing = memberLookup.get(event.props.user);
-      const existingInfo = existing ? existing[event.props.repo] : undefined;
+      const user = event.props.user;
+      const repo = event.props.repo;
+      const userRepoKey = `${user}:${repo}`;
+
+      // Track this removal event
+      if (!removalEvents.has(userRepoKey)) {
+        removalEvents.set(userRepoKey, []);
+      }
+      removalEvents.get(userRepoKey)!.push({
+        actor: event.actor,
+        timestamp: event.props.created_at,
+        removed_at: String(event.date),
+        created_at: event.props.created_at,
+      });
+
+      const existing = memberLookup.get(user);
+      const existingInfo = existing ? existing[repo] : undefined;
+
+      allRemovalEvents.push({
+        event,
+        existing,
+        existingInfo,
+      });
+
+      processedCount++;
+      logger.info(
+        `Removed member event processed: ${user} from ${repo}. Processed count: ${processedCount}`,
+      );
+    }
+
+    logger.info(`Total removal events collected: ${allRemovalEvents.length}`);
+
+    // Second pass: determine should_restore for each removal
+    logger.info('Analyzing subsequent activity...');
+    let restorationCandidates = 0;
+    let skippedDueToSubsequentActivity = 0;
+
+    for (const { event, existing, existingInfo } of allRemovalEvents) {
+      const user = event.props.user;
+      const repo = event.props.repo;
+      const actor = event.actor;
+      const removalTimestamp = event.props.created_at;
+      const userRepoKey = `${user}:${repo}`;
+
+      // Check if actor matches filter (if filter is provided)
+      const actorMatches =
+        !opts.actorFilter || opts.actorFilter.includes(actor);
+
+      let shouldRestore = false;
+      let subsequentActivity = '';
+      let subsequentActivityActor = '';
+      let subsequentActivityTimestamp = '';
+
+      if (actorMatches) {
+        // Check for subsequent removals
+        const removals = removalEvents.get(userRepoKey) || [];
+        const laterRemovals = removals.filter(
+          (r) => r.timestamp > removalTimestamp,
+        );
+
+        if (laterRemovals.length > 0) {
+          const laterRemoval = laterRemovals[0];
+          subsequentActivity = `Removed again after this event`;
+          subsequentActivityActor = laterRemoval.actor;
+          subsequentActivityTimestamp = laterRemoval.removed_at;
+        } else {
+          // Check if user was re-added after this removal
+          if (
+            existingInfo &&
+            existingInfo.created_at &&
+            existingInfo.created_at > removalTimestamp
+          ) {
+            subsequentActivity = `Re-added after this removal`;
+            subsequentActivityActor = existingInfo.actor;
+            subsequentActivityTimestamp = existingInfo.created_at;
+          } else {
+            // No subsequent activity found - safe to restore
+            shouldRestore = true;
+            restorationCandidates++;
+          }
+        }
+
+        if (!shouldRestore) {
+          skippedDueToSubsequentActivity++;
+        }
+      } else {
+        // Actor doesn't match filter
+        subsequentActivity = `Actor '${actor}' not in filter list`;
+      }
 
       const info = {
         actor: event.actor,
@@ -206,16 +331,23 @@ async function handleAction(options: any) {
         orig_actor: existingInfo?.actor,
         orig_document_id: existingInfo?.document_id,
         orig_request_id: existingInfo?.request_id,
+        should_restore: shouldRestore,
+        subsequent_activity: subsequentActivity,
+        subsequent_activity_actor: subsequentActivityActor,
+        subsequent_activity_timestamp: subsequentActivityTimestamp,
       };
 
       appendRecordToCsv(csvFilePath, info, headers);
-
-      processedCount++;
-      logger.info(
-        `Removed member event processed: ${event.props.user} from ${event.props.repo}. Processed count: ${processedCount}`,
-      );
     }
 
+    logger.info(`\n=== Summary ===`);
+    logger.info(`Total removal events: ${allRemovalEvents.length}`);
+    logger.info(
+      `Restoration candidates (should_restore=true): ${restorationCandidates}`,
+    );
+    logger.info(
+      `Skipped due to subsequent activity: ${skippedDueToSubsequentActivity}`,
+    );
     logger.info(`Audit log events written to CSV file: ${csvFilePath}`);
   });
 }

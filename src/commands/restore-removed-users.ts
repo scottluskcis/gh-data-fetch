@@ -145,14 +145,39 @@ async function handleAction(options: any) {
     let permissionDifferent = 0;
     let errors = 0;
     let skipped = 0;
+    let skippedSubsequentActivity = 0;
 
     // Process each record
     for (const record of records) {
       const user = record.user;
       const repoFullName = record.repo;
       const origPermission = record.orig_permission;
+      const shouldRestore = record.should_restore;
 
       totalProcessed++;
+
+      // Check if this record should be restored
+      if (shouldRestore !== 'true' && shouldRestore !== true) {
+        const subsequentActivity =
+          record.subsequent_activity || 'Unknown reason';
+        logger.warn(
+          `Skipping ${user} in ${repoFullName}: ${subsequentActivity}`,
+        );
+        appendRecordToCsv(
+          csvFilePath,
+          {
+            user,
+            repo: repoFullName,
+            requested_permission: origPermission || 'N/A',
+            current_permission: 'N/A',
+            status: 'skipped_subsequent_activity',
+            message: subsequentActivity,
+          },
+          headers,
+        );
+        skippedSubsequentActivity++;
+        continue;
+      }
 
       // Validate permission
       if (!isValidPermission(origPermission)) {
@@ -366,6 +391,7 @@ async function handleAction(options: any) {
     logger.info(`Already exists: ${alreadyExists}`);
     logger.info(`  - With different permission: ${permissionDifferent}`);
     logger.info(`Skipped (invalid permission): ${skipped}`);
+    logger.info(`Skipped (subsequent activity): ${skippedSubsequentActivity}`);
     logger.info(`Errors: ${errors}`);
     logger.info(`\nStatus report written to: ${csvFilePath}`);
   });
