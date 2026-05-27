@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * Flattens a nested object into a single level object with dot notation keys
@@ -63,6 +64,10 @@ export function escapeCsvValue(value: unknown): string {
  * Initializes CSV file with headers
  */
 export function initializeCsvFile(filePath: string, headers: string[]): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
   const headerRow = headers.map(escapeCsvValue).join(',') + '\n';
   fs.writeFileSync(filePath, headerRow, 'utf8');
 }
