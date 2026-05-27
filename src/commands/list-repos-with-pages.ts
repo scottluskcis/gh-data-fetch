@@ -2,19 +2,194 @@ import {
   createBaseCommand,
   executeWithOctokit,
 } from '@scottluskcis/octokit-harness';
+import fs from 'fs';
+import path from 'path';
+
+interface PagesInfo {
+  htmlUrl: string;
+  status: string | null;
+  buildType: string;
+  sourceBranch: string;
+  sourcePath: string;
+  cname: string | null;
+  httpsEnforced: boolean;
+  public: boolean;
+  protectedDomainState: string | null;
+}
+
+interface Repository {
+  name: string;
+  url: string;
+  visibility: string;
+  migrationStatus?: string;
+  archived?: boolean;
+  pagesInfo?: PagesInfo;
+}
+
+const csvHeaders = [
+  'Repository Name',
+  'Visibility',
+  'Migration Status',
+  'Is Archived',
+  'Pages HTML URL',
+  'Pages Status',
+  'Pages Build Type',
+  'Pages Source Branch',
+  'Pages Source Path',
+  'Pages CNAME',
+  'Pages HTTPS Enforced',
+  'Pages Public',
+  'Pages Protected Domain State',
+  'Repository URL',
+].join(',');
+
+function escapeCsvField(value: string): string {
+  if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function toCsvRow(repo: Repository): string {
+  const info = repo.pagesInfo;
+  return [
+    repo.name,
+    repo.visibility,
+    repo.migrationStatus ?? '',
+    repo.archived ? 'true' : 'false',
+    info?.htmlUrl ?? '',
+    info?.status ?? '',
+    info?.buildType ?? '',
+    info?.sourceBranch ?? '',
+    info?.sourcePath ?? '',
+    info?.cname ?? '',
+    info?.httpsEnforced ? 'true' : 'false',
+    info?.public ? 'true' : 'false',
+    info?.protectedDomainState ?? '',
+    repo.url,
+  ]
+    .map(escapeCsvField)
+    .join(',');
+}
+
+async function* getReposWithPages(
+  octokit: any,
+  organization: string,
+  logger: any,
+  pageSize: number = 100,
+): AsyncGenerator<Repository, void, unknown> {
+  let totalFetched = 0;
+  let pageCount = 0;
+
+  try {
+    const reposIterator = octokit.paginate.iterator('/orgs/{org}/repos', {
+      org: organization,
+      per_page: pageSize,
+    });
+
+    for await (const { data: repos } of reposIterator) {
+      for (const repo of repos) {
+        if (repo.has_pages) {
+          logger.info(
+            `Found repo with pages: ${repo.name}, fetching pages info...`,
+          );
+          try {
+            const { data: pages } = await octokit.request(
+              'GET /repos/{owner}/{repo}/pages',
+              {
+                owner: organization,
+                repo: repo.name,
+              },
+            );
+
+            yield {
+              name: repo.name,
+              url: repo.html_url,
+              visibility: repo.visibility,
+              migrationStatus:
+                repo.custom_properties?.['migration-status'] ?? '',
+              archived: repo.archived,
+              pagesInfo: {
+                htmlUrl: pages.html_url,
+                status: pages.status,
+                buildType: pages.build_type,
+                sourceBranch: pages.source?.branch,
+                sourcePath: pages.source?.path,
+                cname: pages.cname,
+                httpsEnforced: pages.https_enforced,
+                public: pages.public,
+                protectedDomainState: pages.protected_domain_state,
+              },
+            };
+          } catch (error: any) {
+            logger.warn(`Skipping repo ${repo.name}: ${error.message}`);
+          }
+        }
+      }
+    }
+  } catch (error: any) {
+    logger.error(`Error fetching repos: ${error.message}`);
+    if (error.status === 404) {
+      logger.warn(
+        `Organization ${organization} not found or pages info not accessible`,
+      );
+    }
+  }
+}
 
 const listReposWithPagesCommand = createBaseCommand({
   name: 'list-repos-with-pages',
   description: 'List any repos that use GitHub Pages',
-}).action(async (options) => {
-  await executeWithOctokit(options, async ({ octokit, logger, opts }) => {
-    logger.info('Starting...');
+})
+  .option(
+    '--csv-output <csvOutput>',
+    'Path to write CSV output file',
+    './output/repos-with-pages.csv',
+  )
+  .action(async (options) => {
+    await executeWithOctokit(options, async ({ octokit, logger, opts }) => {
+      logger.info('Starting to collect repos using GitHub Pages...');
 
-    // do your work here using octokit
-    // ....
+      // Parse comma-separated organization names
+      const organizations = opts.orgName
+        .split(',')
+        .map((org: string) => org.trim());
 
-    logger.info('Finished');
+      // Create CSV output filename template
+      const baseCsvOutput = path.resolve(options.csvOutput);
+      const csvDir = path.dirname(baseCsvOutput);
+      const csvExt = path.extname(baseCsvOutput);
+      const csvBaseName = path.basename(baseCsvOutput, csvExt);
+
+      for (const org of organizations) {
+        logger.info(`Checking organization: ${org}`);
+
+        // Create org-specific CSV filename
+        const orgCsvOutput = path.join(
+          csvDir,
+          `${csvBaseName}_${org}${csvExt}`,
+        );
+        fs.writeFileSync(orgCsvOutput, csvHeaders + '\n');
+        logger.info(`Created CSV file with headers at ${orgCsvOutput}`);
+
+        try {
+          for await (const repoWithPages of getReposWithPages(
+            octokit,
+            org,
+            logger,
+          )) {
+            logger.info(`Repo with Pages: ${repoWithPages.name}`);
+            fs.appendFileSync(orgCsvOutput, toCsvRow(repoWithPages) + '\n');
+          }
+        } catch (error: any) {
+          logger.error(
+            `Error processing organization ${org}: ${error.message}`,
+          );
+        }
+      }
+
+      logger.info('Finished');
+    });
   });
-});
 
 export default listReposWithPagesCommand;
