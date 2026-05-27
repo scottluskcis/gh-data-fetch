@@ -7,7 +7,7 @@
   "scripts": {
     "bundle": "run-s format:write package",
     "start": "npm run bundle && varlock run -- node dist/index.js",
-    "dev": "varlock run -- tsx src/index.ts",
+    "dev": "tsx src/index.ts",
     "format:write": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

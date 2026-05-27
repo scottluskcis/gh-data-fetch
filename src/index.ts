@@ -1,3 +1,4 @@
+import 'varlock/auto-load';
 import { createProgram } from '@scottluskcis/octokit-harness';
 
 import getRepoReleaseSizesCommand from './commands/get-repo-release-sizes.js';
