@@ -4,6 +4,7 @@ import {
 } from '@scottluskcis/octokit-harness';
 import fs from 'fs';
 import path from 'path';
+import { initializeCsvFile } from '../utils/csv.js';
 
 interface PagesInfo {
   htmlUrl: string;
@@ -22,14 +23,17 @@ interface Repository {
   url: string;
   visibility: string;
   migrationStatus?: string;
+  migrationIssue?: string;
   archived?: boolean;
   pagesInfo?: PagesInfo;
 }
 
 const csvHeaders = [
+  'Organization',
   'Repository Name',
   'Visibility',
   'Migration Status',
+  'Migration Issue',
   'Is Archived',
   'Pages HTML URL',
   'Pages Status',
@@ -50,12 +54,14 @@ function escapeCsvField(value: string): string {
   return value;
 }
 
-function toCsvRow(repo: Repository): string {
+function toCsvRow(org: string, repo: Repository): string {
   const info = repo.pagesInfo;
   return [
+    org,
     repo.name,
     repo.visibility,
     repo.migrationStatus ?? '',
+    repo.migrationIssue ?? '',
     repo.archived ? 'true' : 'false',
     info?.htmlUrl ?? '',
     info?.status ?? '',
@@ -108,6 +114,7 @@ async function* getReposWithPages(
               visibility: repo.visibility,
               migrationStatus:
                 repo.custom_properties?.['migration-status'] ?? '',
+              migrationIssue: repo.custom_properties?.['migration-issue'] ?? '',
               archived: repo.archived,
               pagesInfo: {
                 htmlUrl: pages.html_url,
@@ -155,22 +162,13 @@ const listReposWithPagesCommand = createBaseCommand({
         .split(',')
         .map((org: string) => org.trim());
 
-      // Create CSV output filename template
-      const baseCsvOutput = path.resolve(options.csvOutput);
-      const csvDir = path.dirname(baseCsvOutput);
-      const csvExt = path.extname(baseCsvOutput);
-      const csvBaseName = path.basename(baseCsvOutput, csvExt);
+      // Create CSV output file
+      const csvOutput = path.resolve(options.csvOutput);
+      initializeCsvFile(csvOutput, csvHeaders.split(','));
+      logger.info(`Created CSV file with headers at ${csvOutput}`);
 
       for (const org of organizations) {
         logger.info(`Checking organization: ${org}`);
-
-        // Create org-specific CSV filename
-        const orgCsvOutput = path.join(
-          csvDir,
-          `${csvBaseName}_${org}${csvExt}`,
-        );
-        fs.writeFileSync(orgCsvOutput, csvHeaders + '\n');
-        logger.info(`Created CSV file with headers at ${orgCsvOutput}`);
 
         try {
           for await (const repoWithPages of getReposWithPages(
@@ -179,7 +177,7 @@ const listReposWithPagesCommand = createBaseCommand({
             logger,
           )) {
             logger.info(`Repo with Pages: ${repoWithPages.name}`);
-            fs.appendFileSync(orgCsvOutput, toCsvRow(repoWithPages) + '\n');
+            fs.appendFileSync(csvOutput, toCsvRow(org, repoWithPages) + '\n');
           }
         } catch (error: any) {
           logger.error(
