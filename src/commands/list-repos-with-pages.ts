@@ -1,12 +1,10 @@
-import {
-  createBaseCommand,
-  executeWithOctokit,
-} from '@scottluskcis/octokit-harness';
+import { executeWithOctokit } from '@scottluskcis/octokit-harness';
 import { Option } from 'commander';
 import fs from 'fs';
 import path from 'path';
 import { initializeCsvFile } from '../utils/csv.js';
 import { fetchRepoMaintainers } from '../utils/repo-maintainers.js';
+import { createCommandWithSharedOptions } from './command-helpers.js';
 
 interface PagesInfo {
   htmlUrl: string;
@@ -24,6 +22,9 @@ interface Repository {
   name: string;
   url: string;
   visibility: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastPush?: string;
   migrationStatus?: string;
   migrationIssue?: string;
   archived?: boolean;
@@ -36,6 +37,9 @@ const csvHeaders = [
   'Organization',
   'Repository Name',
   'Visibility',
+  'Created At',
+  'Updated At',
+  'Last Push',
   'Migration Status',
   'Migration Issue',
   'Is Archived',
@@ -66,6 +70,9 @@ function toCsvRow(org: string, repo: Repository): string {
     org,
     repo.name,
     repo.visibility,
+    repo.createdAt ?? '',
+    repo.updatedAt ?? '',
+    repo.lastPush ?? '',
     repo.migrationStatus ?? '',
     repo.migrationIssue ?? '',
     repo.archived ? 'true' : 'false',
@@ -116,7 +123,10 @@ async function* getReposWithPages(
               },
             );
 
-            if (onlyPublicPages && !pages.public) {
+            if (
+              onlyPublicPages &&
+              !(pages.public == true || pages.public == 'true')
+            ) {
               logger.info(
                 `Skipping ${repo.name} because it does not have a public Pages site`,
               );
@@ -130,8 +140,8 @@ async function* getReposWithPages(
               teamMembersCache,
               logger,
               excludeTeams,
-              'direct',
-              'admin',
+              'all',
+              'all',
               12,
             );
 
@@ -139,6 +149,9 @@ async function* getReposWithPages(
               name: repo.name,
               url: repo.html_url,
               visibility: repo.visibility,
+              createdAt: repo.created_at ?? '',
+              updatedAt: repo.updated_at ?? '',
+              lastPush: repo.pushed_at ?? '',
               migrationStatus:
                 repo.custom_properties?.['migration-status'] ?? '',
               migrationIssue: repo.custom_properties?.['migration-issue'] ?? '',
@@ -174,10 +187,10 @@ async function* getReposWithPages(
   }
 }
 
-const listReposWithPagesCommand = createBaseCommand({
-  name: 'list-repos-with-pages',
-  description: 'List any repos that use GitHub Pages',
-})
+const listReposWithPagesCommand = createCommandWithSharedOptions(
+  'list-repos-with-pages',
+)
+  .description('List any repos that use GitHub Pages')
   .addOption(
     new Option('--csv-output <csvOutput>', 'Path to write CSV output file')
       .default('./output/repos-with-pages.csv')
@@ -195,7 +208,7 @@ const listReposWithPagesCommand = createBaseCommand({
       'Only include repos with public GitHub Pages sites',
     )
       .env('ONLY_PUBLIC_PAGES')
-      .default('false'),
+      .default(false),
   )
   .action(async (options) => {
     await executeWithOctokit(options, async ({ octokit, logger, opts }) => {
@@ -216,8 +229,13 @@ const listReposWithPagesCommand = createBaseCommand({
           : [],
       );
 
-      // Create CSV output file
-      const csvOutput = path.resolve(options.csvOutput);
+      // Create CSV output file with timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const parsed = path.parse(path.resolve(options.csvOutput));
+      const csvOutput = path.join(
+        parsed.dir,
+        `${parsed.name}-${timestamp}${parsed.ext}`,
+      );
       initializeCsvFile(csvOutput, csvHeaders.split(','));
       logger.info(`Created CSV file with headers at ${csvOutput}`);
 
@@ -232,6 +250,9 @@ const listReposWithPagesCommand = createBaseCommand({
             logger,
             teamMembersCache,
             excludeTeams,
+            100,
+            options.onlyPublicPages === 'true' ||
+              options.onlyPublicPages === true,
           )) {
             logger.info(`Repo with Pages: ${repoWithPages.name}`);
             fs.appendFileSync(csvOutput, toCsvRow(org, repoWithPages) + '\n');
