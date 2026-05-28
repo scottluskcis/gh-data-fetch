@@ -24,6 +24,22 @@ function isHigherRole(candidate: AccessRole, current: AccessRole): boolean {
   return ROLE_PRIORITY[candidate] > ROLE_PRIORITY[current];
 }
 
+function isLikelyBot(value: string): boolean {
+  const botPatterns = [
+    /\[bot\]$/i,
+    /^bot-/i,
+    /-bot$/i,
+    /^github-actions/i,
+    /^dependabot/i,
+    /^app\/\w+/i,
+    /^github-pages/i,
+    /^renovate/i,
+    /no-?reply@\w+\.\w+$/i,
+    /\bautomat(ed|ion)\b/i,
+  ];
+  return botPatterns.some((pattern) => pattern.test(value));
+}
+
 async function getOrgVerifiedDomainEmails(
   octokit: any,
   username: string,
@@ -63,6 +79,7 @@ export async function fetchRepoMaintainers(
       { owner, repo, affiliation: 'direct', per_page: 100 },
     )) {
       for (const user of response.data) {
+        if (isLikelyBot(user.login)) continue;
         const role = mapPermissionToRole(user.role_name ?? '');
         if (role) {
           userMap.set(user.login, role);
@@ -99,6 +116,7 @@ export async function fetchRepoMaintainers(
         }
 
         for (const login of members) {
+          if (isLikelyBot(login)) continue;
           const existing = userMap.get(login);
           if (!existing || isHigherRole(teamRole, existing)) {
             userMap.set(login, teamRole);
