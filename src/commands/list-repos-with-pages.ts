@@ -2,6 +2,7 @@ import {
   createBaseCommand,
   executeWithOctokit,
 } from '@scottluskcis/octokit-harness';
+import { Option } from 'commander';
 import fs from 'fs';
 import path from 'path';
 import { initializeCsvFile } from '../utils/csv.js';
@@ -28,6 +29,7 @@ interface Repository {
   archived?: boolean;
   pagesInfo?: PagesInfo;
   maintainers?: string[];
+  securityMaintainers?: string;
 }
 
 const csvHeaders = [
@@ -47,7 +49,8 @@ const csvHeaders = [
   'Pages Public',
   'Pages Protected Domain State',
   'Repository URL',
-  'Maintainers',
+  'Admins or Maintainers',
+  'Security Maintainers',
 ].join(',');
 
 function escapeCsvField(value: string): string {
@@ -77,6 +80,7 @@ function toCsvRow(org: string, repo: Repository): string {
     info?.protectedDomainState ?? '',
     repo.url,
     (repo.maintainers ?? []).join(';'),
+    repo.securityMaintainers ?? '',
   ]
     .map(escapeCsvField)
     .join(',');
@@ -87,7 +91,9 @@ async function* getReposWithPages(
   organization: string,
   logger: any,
   teamMembersCache: Map<string, string[]>,
+  excludeTeams: Set<string>,
   pageSize: number = 100,
+  onlyPublicPages: boolean = false,
 ): AsyncGenerator<Repository, void, unknown> {
   try {
     const reposIterator = octokit.paginate.iterator('/orgs/{org}/repos', {
@@ -110,12 +116,23 @@ async function* getReposWithPages(
               },
             );
 
+            if (onlyPublicPages && !pages.public) {
+              logger.info(
+                `Skipping ${repo.name} because it does not have a public Pages site`,
+              );
+              continue;
+            }
+
             const maintainers = await fetchRepoMaintainers(
               octokit,
               organization,
               repo.name,
               teamMembersCache,
               logger,
+              excludeTeams,
+              'direct',
+              'admin',
+              12,
             );
 
             yield {
@@ -138,6 +155,8 @@ async function* getReposWithPages(
                 protectedDomainState: pages.protected_domain_state ?? null,
               },
               maintainers,
+              securityMaintainers:
+                repo.custom_properties?.['security-maintainers'] ?? '',
             };
           } catch (error: any) {
             logger.warn(`Skipping repo ${repo.name}: ${error.message}`);
@@ -159,10 +178,24 @@ const listReposWithPagesCommand = createBaseCommand({
   name: 'list-repos-with-pages',
   description: 'List any repos that use GitHub Pages',
 })
-  .option(
-    '--csv-output <csvOutput>',
-    'Path to write CSV output file',
-    './output/repos-with-pages.csv',
+  .addOption(
+    new Option('--csv-output <csvOutput>', 'Path to write CSV output file')
+      .default('./output/repos-with-pages.csv')
+      .env('CSV_OUTPUT'),
+  )
+  .addOption(
+    new Option(
+      '--exclude-teams <excludeTeams>',
+      'Comma-separated list of team slugs to exclude from maintainers check',
+    ).env('EXCLUDE_TEAMS'),
+  )
+  .addOption(
+    new Option(
+      '--only-public-pages',
+      'Only include repos with public GitHub Pages sites',
+    )
+      .env('ONLY_PUBLIC_PAGES')
+      .default('false'),
   )
   .action(async (options) => {
     await executeWithOctokit(options, async ({ octokit, logger, opts }) => {
@@ -172,6 +205,16 @@ const listReposWithPagesCommand = createBaseCommand({
       const organizations = opts.orgName
         .split(',')
         .map((org: string) => org.trim());
+
+      // Parse excluded teams
+      const excludeTeams = new Set<string>(
+        options.excludeTeams
+          ? options.excludeTeams
+              .split(',')
+              .map((t: string) => t.trim().toLowerCase())
+              .filter((t: string) => t.length > 0)
+          : [],
+      );
 
       // Create CSV output file
       const csvOutput = path.resolve(options.csvOutput);
@@ -188,6 +231,7 @@ const listReposWithPagesCommand = createBaseCommand({
             org,
             logger,
             teamMembersCache,
+            excludeTeams,
           )) {
             logger.info(`Repo with Pages: ${repoWithPages.name}`);
             fs.appendFileSync(csvOutput, toCsvRow(org, repoWithPages) + '\n');

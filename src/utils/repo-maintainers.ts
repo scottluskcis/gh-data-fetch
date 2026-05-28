@@ -69,36 +69,71 @@ export async function fetchRepoMaintainers(
   repo: string,
   teamMembersCache: Map<string, string[]>,
   logger: any,
+  excludeTeams: Set<string> = new Set(),
+  includeUsers: 'all' | 'direct' | 'teams' = 'all',
+  teamRoleToInclude: 'all' | 'admin' | 'maintainer' | 'write' = 'all',
+  maxUsers: number = 25,
 ): Promise<string[]> {
   const userMap = new Map<string, AccessRole>();
 
   // Direct collaborators
-  try {
-    for await (const response of octokit.paginate.iterator(
-      octokit.rest.repos.listCollaborators,
-      { owner, repo, affiliation: 'direct', per_page: 100 },
-    )) {
-      for (const user of response.data) {
-        if (isLikelyBot(user.login)) continue;
-        const role = mapPermissionToRole(user.role_name ?? '');
-        if (role) {
-          userMap.set(user.login, role);
+  if (includeUsers === 'all' || includeUsers === 'direct') {
+    try {
+      for await (const response of octokit.paginate.iterator(
+        octokit.rest.repos.listCollaborators,
+        { owner, repo, affiliation: 'direct', per_page: 100 },
+      )) {
+        for (const user of response.data) {
+          if (isLikelyBot(user.login)) continue;
+          const role = mapPermissionToRole(user.role_name ?? '');
+          if (role) {
+            userMap.set(user.login, role);
+          }
         }
       }
+    } catch (error: any) {
+      logger.warn(
+        `Could not fetch collaborators for ${repo}: ${error.message}`,
+      );
     }
-  } catch (error: any) {
-    logger.warn(`Could not fetch collaborators for ${repo}: ${error.message}`);
   }
 
-  // Team members
-  try {
-    for await (const response of octokit.paginate.iterator(
-      octokit.rest.repos.listTeams,
-      { owner, repo, per_page: 100 },
-    )) {
-      for (const team of response.data) {
-        const teamRole = mapPermissionToRole(team.permission);
-        if (!teamRole) continue;
+  // Team members - collect teams first, sort by role priority, then fetch members
+  if (includeUsers === 'all' || includeUsers === 'teams') {
+    try {
+      const teams: { slug: string; permission: string }[] = [];
+      for await (const response of octokit.paginate.iterator(
+        octokit.rest.repos.listTeams,
+        { owner, repo, per_page: 100 },
+      )) {
+        for (const team of response.data) {
+          if (excludeTeams.has(team.slug.toLowerCase())) continue;
+          const teamRole = mapPermissionToRole(team.permission);
+          if (
+            !teamRole ||
+            (teamRoleToInclude != 'all' &&
+              teamRole.toLowerCase() != teamRoleToInclude)
+          )
+            continue;
+          teams.push({ slug: team.slug, permission: team.permission });
+        }
+      }
+
+      // Sort teams by role priority (admin teams first)
+      teams.sort((a, b) => {
+        const roleA = mapPermissionToRole(a.permission)!;
+        const roleB = mapPermissionToRole(b.permission)!;
+        return ROLE_PRIORITY[roleB] - ROLE_PRIORITY[roleA];
+      });
+
+      for (const team of teams) {
+        const teamRole = mapPermissionToRole(team.permission)!;
+
+        // If we already have enough users at this role level or higher, stop
+        const usersAtOrAbove = [...userMap.values()].filter(
+          (r) => ROLE_PRIORITY[r] >= ROLE_PRIORITY[teamRole],
+        ).length;
+        if (usersAtOrAbove >= maxUsers) break;
 
         const cacheKey = `${owner}/${team.slug}`;
         let members = teamMembersCache.get(cacheKey);
@@ -123,14 +158,19 @@ export async function fetchRepoMaintainers(
           }
         }
       }
+    } catch (error: any) {
+      logger.warn(`Could not fetch teams for ${repo}: ${error.message}`);
     }
-  } catch (error: any) {
-    logger.warn(`Could not fetch teams for ${repo}: ${error.message}`);
   }
+
+  // Sort users by role priority (admin > maintainer > write) and limit to maxUsers
+  const sortedUsers = [...userMap.entries()]
+    .sort((a, b) => ROLE_PRIORITY[b[1]] - ROLE_PRIORITY[a[1]])
+    .slice(0, maxUsers);
 
   // Resolve logins to verified domain emails
   const emails: string[] = [];
-  for (const login of userMap.keys()) {
+  for (const [login] of sortedUsers) {
     const userEmails = await getOrgVerifiedDomainEmails(octokit, login, owner);
     if (userEmails.length > 0) {
       emails.push(...userEmails);
