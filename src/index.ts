@@ -11,6 +11,8 @@ import listTeamMembersCommand from './commands/list-team-members.js';
 import codespacesUsageCommand from './commands/codespaces-usage.js';
 import getMigrationExportStatusCommand from './commands/migration-export-status.js';
 import listRepoSecretScanAlertsCommand from './commands/list-repo-secret-scan-alerts.js';
+import identifyRemovedUsersCommand from './commands/identify-removed-users.js';
+import restoreRemovedUsersCommand from './commands/restore-removed-users.js';
 
 const program = createProgram({
   name: 'octokit-sandbox',
@@ -26,6 +28,8 @@ const program = createProgram({
     codespacesUsageCommand,
     getMigrationExportStatusCommand,
     listRepoSecretScanAlertsCommand,
+    identifyRemovedUsersCommand,
+    restoreRemovedUsersCommand,
   ],
 });
 
