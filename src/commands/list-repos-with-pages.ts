@@ -5,6 +5,7 @@ import {
 import fs from 'fs';
 import path from 'path';
 import { initializeCsvFile } from '../utils/csv.js';
+import { fetchRepoMaintainers } from '../utils/repo-maintainers.js';
 
 interface PagesInfo {
   htmlUrl: string;
@@ -26,6 +27,7 @@ interface Repository {
   migrationIssue?: string;
   archived?: boolean;
   pagesInfo?: PagesInfo;
+  maintainers?: string[];
 }
 
 const csvHeaders = [
@@ -45,6 +47,7 @@ const csvHeaders = [
   'Pages Public',
   'Pages Protected Domain State',
   'Repository URL',
+  'Maintainers',
 ].join(',');
 
 function escapeCsvField(value: string): string {
@@ -73,6 +76,7 @@ function toCsvRow(org: string, repo: Repository): string {
     info?.public ? 'true' : 'false',
     info?.protectedDomainState ?? '',
     repo.url,
+    (repo.maintainers ?? []).join(';'),
   ]
     .map(escapeCsvField)
     .join(',');
@@ -82,11 +86,9 @@ async function* getReposWithPages(
   octokit: any,
   organization: string,
   logger: any,
+  teamMembersCache: Map<string, string[]>,
   pageSize: number = 100,
 ): AsyncGenerator<Repository, void, unknown> {
-  let totalFetched = 0;
-  let pageCount = 0;
-
   try {
     const reposIterator = octokit.paginate.iterator('/orgs/{org}/repos', {
       org: organization,
@@ -94,7 +96,7 @@ async function* getReposWithPages(
     });
 
     for await (const { data: repos } of reposIterator) {
-      for (const repo of repos) {
+      for (const repo of repos as any[]) {
         if (repo.has_pages) {
           logger.info(
             `Found repo with pages: ${repo.name}, fetching pages info...`,
@@ -108,6 +110,14 @@ async function* getReposWithPages(
               },
             );
 
+            const maintainers = await fetchRepoMaintainers(
+              octokit,
+              organization,
+              repo.name,
+              teamMembersCache,
+              logger,
+            );
+
             yield {
               name: repo.name,
               url: repo.html_url,
@@ -117,16 +127,17 @@ async function* getReposWithPages(
               migrationIssue: repo.custom_properties?.['migration-issue'] ?? '',
               archived: repo.archived,
               pagesInfo: {
-                htmlUrl: pages.html_url,
-                status: pages.status,
-                buildType: pages.build_type,
-                sourceBranch: pages.source?.branch,
-                sourcePath: pages.source?.path,
-                cname: pages.cname,
-                httpsEnforced: pages.https_enforced,
-                public: pages.public,
-                protectedDomainState: pages.protected_domain_state,
+                htmlUrl: pages.html_url ?? '',
+                status: pages.status ?? null,
+                buildType: pages.build_type ?? '',
+                sourceBranch: pages.source?.branch ?? '',
+                sourcePath: pages.source?.path ?? '',
+                cname: pages.cname ?? null,
+                httpsEnforced: pages.https_enforced ?? false,
+                public: pages.public ?? false,
+                protectedDomainState: pages.protected_domain_state ?? null,
               },
+              maintainers,
             };
           } catch (error: any) {
             logger.warn(`Skipping repo ${repo.name}: ${error.message}`);
@@ -170,11 +181,13 @@ const listReposWithPagesCommand = createBaseCommand({
       for (const org of organizations) {
         logger.info(`Checking organization: ${org}`);
 
+        const teamMembersCache = new Map<string, string[]>();
         try {
           for await (const repoWithPages of getReposWithPages(
             octokit,
             org,
             logger,
+            teamMembersCache,
           )) {
             logger.info(`Repo with Pages: ${repoWithPages.name}`);
             fs.appendFileSync(csvOutput, toCsvRow(org, repoWithPages) + '\n');
