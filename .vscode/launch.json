@@ -31,7 +31,8 @@
         "list-team-members",
         "list-webhooks",
         "migration-export-status",
-        "unlock-org-repository"
+        "unlock-org-repository",
+        "list-repos-by-custom-property"
       ],
       "default": ""
     }

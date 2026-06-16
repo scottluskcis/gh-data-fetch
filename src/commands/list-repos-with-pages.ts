@@ -99,7 +99,7 @@ async function* getReposWithPages(
   logger: any,
   teamMembersCache: Map<string, string[]>,
   excludeTeams: Set<string>,
-  pageSize: number = 100,
+  pageSize = 100,
   onlyPublicPages: boolean = false,
 ): AsyncGenerator<Repository, void, unknown> {
   try {
