@@ -62,27 +62,41 @@ export async function* listAlertsForRepo({
     throw new Error('Repo is required');
   }
 
-  const iterator = octokit.paginate.iterator(
-    octokit.rest.secretScanning.listAlertsForRepo,
-    {
-      owner,
-      repo,
-      state,
-      secret_type,
-      resolution,
-      validity,
-      is_publicly_leaked,
-      per_page: per_page,
-      page: page,
-      is_multi_repo,
-      hide_secret,
-    },
-  );
+  try {
+    const iterator = octokit.paginate.iterator(
+      octokit.rest.secretScanning.listAlertsForRepo,
+      {
+        owner,
+        repo,
+        state,
+        secret_type,
+        resolution,
+        validity,
+        is_publicly_leaked,
+        per_page: per_page,
+        page: page,
+        is_multi_repo,
+        hide_secret,
+      },
+    );
 
-  for await (const { data: alerts } of iterator) {
-    for (const alert of alerts) {
-      yield alert;
+    for await (const { data: alerts } of iterator) {
+      for (const alert of alerts) {
+        yield alert;
+      }
     }
+  } catch (error: unknown) {
+    const err = error as { status?: number; message?: string };
+    if (
+      err.status === 404 &&
+      err.message?.includes('Secret scanning is disabled')
+    ) {
+      console.warn(
+        `⚠️  Secret scanning is disabled for ${owner}/${repo}. Skipping.`,
+      );
+      return;
+    }
+    throw error;
   }
 }
 
