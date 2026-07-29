@@ -4,7 +4,7 @@ import {
   parseRepositoryList,
   resolveCustomPropertyValue,
   selectRepositoryNames,
-} from './custom-properties.js';
+} from '../../src/utils/custom-properties.js';
 
 describe('resolveCustomPropertyValue', () => {
   it('returns a string value', () => {

@@ -84,9 +84,13 @@ defined.
 - Add unit tests for parsers, transformations, and reusable domain logic.
 - Never call a live GitHub API from tests. Use typed fixtures or mocks only
   when a boundary must be exercised.
-- Use Vitest for unit tests and keep focused test files next to the source as
-  `*.test.ts`. If Vitest is not configured, initialize it before adding tests;
-  do not introduce a different test framework without explicit user approval.
+- Use Vitest for unit tests. Put `*.test.ts` files under `tests/` in a directory
+  structure that mirrors `src/` rather than colocating tests with source files.
+  For example, tests for `src/utils/example.ts` belong in
+  `tests/utils/example.test.ts`, and tests for `src/commands/example.ts` belong
+  in `tests/commands/example.test.ts`. If Vitest is not configured, initialize
+  it before adding tests; do not introduce a different test framework without
+  explicit user approval.
 - Run the smallest relevant tests first, then the repository's existing
   `pnpm test`, `pnpm lint`, `pnpm format:check`, and `pnpm bundle` commands.
   Because `pnpm bundle` runs the formatter in write mode, review its changes
