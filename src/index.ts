@@ -12,6 +12,7 @@ import codespacesUsageCommand from './commands/codespaces-usage.js';
 import getMigrationExportStatusCommand from './commands/migration-export-status.js';
 import listRepoSecretScanAlertsCommand from './commands/list-repo-secret-scan-alerts.js';
 import listReposWithPagesCommand from './commands/list-repos-with-pages.js';
+import compareOrgRepositoriesCommand from './commands/compare-org-repositories.js';
 
 const program = createProgram({
   name: 'octokit-sandbox',
@@ -28,6 +29,7 @@ const program = createProgram({
     getMigrationExportStatusCommand,
     listRepoSecretScanAlertsCommand,
     listReposWithPagesCommand,
+    compareOrgRepositoriesCommand,
   ],
 });
 
