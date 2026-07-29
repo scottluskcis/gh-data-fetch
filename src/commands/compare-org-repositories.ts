@@ -1,5 +1,5 @@
 import { executeWithOctokit } from '@scottluskcis/octokit-harness';
-import { RestEndpointMethodTypes } from '@octokit/plugin-rest-endpoint-methods';
+import type { RestEndpointMethodTypes } from '@octokit/plugin-rest-endpoint-methods';
 import { Option } from 'commander';
 import { Octokit } from 'octokit';
 import path from 'path';
@@ -104,50 +104,20 @@ export async function listOrganizationRepositories(
   return repositories;
 }
 
-function getErrorStatus(error: unknown): number | undefined {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    typeof error.status === 'number'
-  ) {
-    return error.status;
-  }
-
-  return undefined;
-}
-
 export async function findComparisonRepositories(
   octokit: Octokit,
   organization: string,
-  sourceRepositories: Repository[],
-  concurrency = 10,
 ): Promise<Map<string, Repository>> {
-  const repositoriesByName = new Map<string, Repository>();
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (nextIndex < sourceRepositories.length) {
-      const repository = sourceRepositories[nextIndex++];
-
-      try {
-        const response = await octokit.rest.repos.get({
-          owner: organization,
-          repo: repository.name,
-        });
-        repositoriesByName.set(response.data.name.toLowerCase(), response.data);
-      } catch (error: unknown) {
-        if (getErrorStatus(error) !== 404) {
-          throw error;
-        }
-      }
-    }
-  }
-
-  const workerCount = Math.min(concurrency, sourceRepositories.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-
-  return repositoriesByName;
+  const repositories = await listOrganizationRepositories(
+    octokit,
+    organization,
+  );
+  return new Map(
+    repositories.map((repository) => [
+      repository.name.toLowerCase(),
+      repository,
+    ]),
+  );
 }
 
 function buildCsvRecord(
@@ -252,12 +222,11 @@ const compareOrgRepositoriesCommand = createCommandWithSharedOptions(
     }
 
     commandLogger.info(
-      `Checking ${sourceRepositories.length} repository names in comparison organization ${compareOrg.name}...`,
+      `Fetching repositories from comparison organization ${compareOrg.name}...`,
     );
     const compareRepositoriesByName = await findComparisonRepositories(
       compareOctokit,
       compareOrg.name,
-      sourceRepositories,
     );
 
     sourceRepositories.sort((left, right) =>
