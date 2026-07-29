@@ -1,0 +1,14 @@
+{
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "1.1.0",
+      "resolved": "ghcr.io/devcontainers/features/github-cli@sha256:d22f50b70ed75339b4eed1ba9ecde3a1791f90e88d37936517e3bace0bbad671",
+      "integrity": "sha256:d22f50b70ed75339b4eed1ba9ecde3a1791f90e88d37936517e3bace0bbad671"
+    },
+    "ghcr.io/flexwie/devcontainer-features/op:1": {
+      "version": "1.0.0",
+      "resolved": "ghcr.io/flexwie/devcontainer-features/op@sha256:68098ff0ac2447bcf0eeee7ac19123bd0375fd43330ee3c9ca4dee510b74c6d3",
+      "integrity": "sha256:68098ff0ac2447bcf0eeee7ac19123bd0375fd43330ee3c9ca4dee510b74c6d3"
+    }
+  }
+}

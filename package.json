@@ -17,7 +17,7 @@
     "package": "rollup --config rollup.config.ts --configPlugin @rollup/plugin-typescript",
     "package:watch": "rollup --config rollup.config.ts --configPlugin @rollup/plugin-typescript --watch",
     "env:load": "varlock load --env dev",
-    "test": "NODE_OPTIONS=--experimental-vm-modules NODE_NO_WARNINGS=1 jest",
+    "test": "vitest run",
     "lint:fix": "eslint \"**/*.ts\" --fix"
   },
   "keywords": [],
@@ -54,6 +54,7 @@
     "ts-node": "^10.9.2",
     "tslib": "^2.8.1",
     "tsx": "^4.22.4",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "4.1.10"
   }
 }

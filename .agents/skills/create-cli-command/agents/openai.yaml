@@ -1,0 +1,5 @@
+interface:
+  display_name: 'Create CLI Command'
+  short_description: 'Create and wire a repository CLI command'
+policy:
+  allow_implicit_invocation: true

@@ -21,6 +21,7 @@
       "type": "pickString",
       "description": "Select command to debug",
       "options": [
+        "compare-org-repositories",
         "codespaces-usage",
         "get-issues-by-user",
         "get-package-details",
@@ -31,6 +32,7 @@
         "list-team-members",
         "list-webhooks",
         "migration-export-status",
+        "set-org-repo-custom-property",
         "unlock-org-repository"
       ],
       "default": ""
