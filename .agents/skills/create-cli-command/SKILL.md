@@ -41,6 +41,22 @@ defined.
 2. Build the command with `createCommandWithSharedOptions`; do not use
    `createBaseCommand` or construct `Command` directly.
 3. Run authenticated work through `executeWithOctokit`.
+   - A callback containing one safe API operation may use the default
+     whole-callback retry behavior.
+   - For workflows with multiple API requests, pagination, persisted progress,
+     or side effects, prevent a later failure from replaying earlier work. Call
+     `executeWithOctokit` once with a copied options object whose
+     `retryDisabled` value is `true`, then use the harness's `withRetry` around
+     each independent API operation.
+   - Preserve the user's original retry settings before disabling the outer
+     retry. Honor `retryDisabled`, use the configured attempt and backoff
+     values, and log operation-specific retry context.
+   - Keep state mutations outside retry callbacks. Fetch pagination one page at
+     a time when practical, and retry each idempotent update batch separately
+     so completed pages or batches are not repeated.
+   - Do not retry local parsing, validation, or output writes. Avoid retrying
+     non-idempotent API operations unless they have an idempotency mechanism or
+     an explicit recovery strategy.
 4. Add command-specific options with Commander `Option`. Every such option must
    call `.env('VARIABLE_NAME')`.
 5. Reuse a semantically equivalent variable already declared in `.env.schema`.
@@ -68,9 +84,9 @@ defined.
 - Add unit tests for parsers, transformations, and reusable domain logic.
 - Never call a live GitHub API from tests. Use typed fixtures or mocks only
   when a boundary must be exercised.
-- Follow test conventions already present when the skill is invoked. Do not
-  introduce a new test framework unless the repository has no usable existing
-  runner and the user explicitly approves that dependency change.
+- Use Vitest for unit tests and keep focused test files next to the source as
+  `*.test.ts`. If Vitest is not configured, initialize it before adding tests;
+  do not introduce a different test framework without explicit user approval.
 - Run the smallest relevant tests first, then the repository's existing
   `pnpm test`, `pnpm lint`, `pnpm format:check`, and `pnpm bundle` commands.
   Because `pnpm bundle` runs the formatter in write mode, review its changes
