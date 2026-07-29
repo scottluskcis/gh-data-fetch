@@ -8,6 +8,7 @@ import { Option } from 'commander';
 import fs from 'fs';
 import {
   chunkRepositoryNames,
+  parseBooleanOption,
   parseRepositoryList,
   resolveCustomPropertyValue,
   selectRepositoryNames,
@@ -61,14 +62,17 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
       .makeOptionMandatory(),
   )
   .addOption(
-    new Option('--property-value <value>', 'Custom property string value')
-      .env('CUSTOM_PROPERTY_VALUE')
-      .conflicts('clear'),
+    new Option('--property-value <value>', 'Custom property string value').env(
+      'CUSTOM_PROPERTY_VALUE',
+    ),
   )
   .addOption(
-    new Option('--clear', 'Unset the custom property value on each repository')
+    new Option(
+      '--clear [boolean]',
+      'Unset the custom property value on each repository',
+    )
       .env('CLEAR_CUSTOM_PROPERTY_VALUE')
-      .conflicts('propertyValue'),
+      .argParser(parseBooleanOption),
   )
   .action(async (options) => {
     if (!options.orgName) {

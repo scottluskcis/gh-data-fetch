@@ -1,10 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
   chunkRepositoryNames,
+  parseBooleanOption,
   parseRepositoryList,
   resolveCustomPropertyValue,
   selectRepositoryNames,
 } from '../../src/utils/custom-properties.js';
+
+describe('parseBooleanOption', () => {
+  it('parses explicit boolean environment values', () => {
+    expect(parseBooleanOption('true')).toBe(true);
+    expect(parseBooleanOption('false')).toBe(false);
+  });
+
+  it('rejects ambiguous boolean values', () => {
+    expect(() => parseBooleanOption('yes')).toThrow(
+      'Expected "true" or "false"',
+    );
+  });
+});
 
 describe('resolveCustomPropertyValue', () => {
   it('returns a string value', () => {
