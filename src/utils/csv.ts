@@ -14,6 +14,23 @@ export function parseCsvRecords(contents: string): Record<string, string>[] {
   }) as Record<string, string>[];
 }
 
+export type CsvPrimitive = string | number | boolean | null | undefined;
+
+const ERROR_HEADERS = [
+  'scope',
+  'organization',
+  'page_or_cursor',
+  'operation',
+  'message',
+];
+
+export interface CsvExport {
+  outputFile: string;
+  errorFile: string;
+  append(record: Record<string, CsvPrimitive>): void;
+  appendError(record: Record<string, CsvPrimitive>): void;
+}
+
 /**
  * Flattens a nested object into a single level object with dot notation keys
  * @param obj - The object to flatten
@@ -100,6 +117,39 @@ export function appendRecordToCsv(
 
   // Append row to file
   fs.appendFileSync(filePath, row.join(',') + '\n', 'utf8');
+}
+
+export function validateOutputFile(outputFile: string, force: boolean): string {
+  const resolved = path.resolve(outputFile);
+  const errorFile = `${resolved}.errors.csv`;
+  if (!force && (fs.existsSync(resolved) || fs.existsSync(errorFile))) {
+    throw new Error(
+      `Output already exists for ${resolved}; use --force to replace it`,
+    );
+  }
+  return resolved;
+}
+
+export function createCsvExport(options: {
+  outputFile: string;
+  headers: string[];
+  force: boolean;
+}): CsvExport {
+  const outputFile = validateOutputFile(options.outputFile, options.force);
+  const errorFile = `${outputFile}.errors.csv`;
+  initializeCsvFile(outputFile, options.headers);
+  initializeCsvFile(errorFile, ERROR_HEADERS);
+
+  return {
+    outputFile,
+    errorFile,
+    append(record) {
+      appendRecordToCsv(outputFile, record, options.headers);
+    },
+    appendError(record) {
+      appendRecordToCsv(errorFile, record, ERROR_HEADERS);
+    },
+  };
 }
 
 /**
