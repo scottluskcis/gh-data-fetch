@@ -14,15 +14,21 @@ import listRepoSecretScanAlertsCommand from './commands/list-repo-secret-scan-al
 import listReposWithPagesCommand from './commands/list-repos-with-pages.js';
 import compareOrgRepositoriesCommand from './commands/compare-org-repositories.js';
 import setOrgRepoCustomPropertyCommand from './commands/set-org-repo-custom-property.js';
+import auditOrgReposCommand from './commands/audit-org-repos.js';
+import listEnterpriseOrgsCommand from './commands/list-enterprise-orgs.js';
+import listOrgReposCommand from './commands/list-org-repos.js';
 
 const program = createProgram({
   name: 'octokit-sandbox',
   description: 'A tool for interacting with GitHub repositories',
   commands: [
+    auditOrgReposCommand,
     getPackageDetailsCommand,
     getRepoReleaseSizesCommand,
     getAssigneeIssues,
     listOrgMigrationsCommand,
+    listEnterpriseOrgsCommand,
+    listOrgReposCommand,
     unlockOrgRepositoryCommand,
     listWebhooksCommand,
     listTeamMembersCommand,
