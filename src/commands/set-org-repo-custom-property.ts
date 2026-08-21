@@ -1,54 +1,19 @@
-import {
-  executeWithOctokit,
-  type Logger,
-  type RetryConfig,
-  withRetry,
-} from '@scottluskcis/octokit-harness';
+import { executeWithOctokit } from '@scottluskcis/octokit-harness';
 import { Option } from 'commander';
 import fs from 'fs';
+import { executeApiOperation } from '../utils/api-operation.js';
 import {
   chunkRepositoryNames,
-  parseBooleanOption,
   parseRepositoryList,
   resolveCustomPropertyValue,
   selectRepositoryNames,
 } from '../utils/custom-properties.js';
-import { createCommandWithSharedOptions } from './command-helpers.js';
-
-function getErrorStatus(error: unknown): number | undefined {
-  if (
-    typeof error === 'object' &&
-    error !== null &&
-    'status' in error &&
-    typeof error.status === 'number'
-  ) {
-    return error.status;
-  }
-
-  return undefined;
-}
-
-function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-export async function executeApiOperation<T>(
-  operation: () => Promise<T>,
-  retryConfig: RetryConfig,
-  retryDisabled: boolean,
-  logger: Logger,
-  description: string,
-): Promise<T> {
-  if (retryDisabled) {
-    return operation();
-  }
-
-  return withRetry(operation, retryConfig, (state) => {
-    logger.warn(
-      `${description} failed (attempt ${state.attempt}); retrying: ${state.error?.message ?? 'Unknown error'}`,
-    );
-  });
-}
+import { errorMessage, errorStatus } from '../utils/errors.js';
+import {
+  createCommandWithSharedOptions,
+  parseBooleanOption,
+  retryConfigFromOptions,
+} from './command-helpers.js';
 
 const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
   'set-org-repo-custom-property',
@@ -85,15 +50,8 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
       options.propertyValue,
       options.clear,
     );
-    const retryDisabled =
-      options.retryDisabled === true || options.retryDisabled === 'true';
-    const retryConfig: RetryConfig = {
-      maxAttempts: options.retryMaxAttempts ?? 5,
-      initialDelayMs: options.retryInitialDelay ?? 1000,
-      maxDelayMs: options.retryMaxDelay ?? 30000,
-      backoffFactor: options.retryBackoffFactor ?? 2,
-      successThreshold: options.retrySuccessThreshold ?? 5,
-    };
+    const retryDisabled = options.retryDisabled;
+    const retryConfig = retryConfigFromOptions(options);
 
     await executeWithOctokit(
       { ...options, retryDisabled: true },
@@ -113,7 +71,7 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
               );
               return response.data;
             } catch (error: unknown) {
-              if (getErrorStatus(error) === 404) {
+              if (errorStatus(error) === 404) {
                 missingPropertyError = error;
                 return undefined;
               }
@@ -215,7 +173,7 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
             updatedCount += repositoryBatch.length;
           } catch (error: unknown) {
             logger.error(
-              `Update failed after ${updatedCount} of ${repositoryNames.length} repositories: ${getErrorMessage(error)}`,
+              `Update failed after ${updatedCount} of ${repositoryNames.length} repositories: ${errorMessage(error)}`,
             );
             throw error;
           }
