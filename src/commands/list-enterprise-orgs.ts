@@ -152,7 +152,7 @@ completed rows, write <output-file>.errors.csv, and exit nonzero.
         } catch (error: unknown) {
           output.appendError({
             scope: 'enterprise',
-            organization: '',
+            organization: options.enterpriseSlug,
             page_or_cursor: cursor,
             operation: 'list-enterprise-organizations',
             message: errorMessage(error),
