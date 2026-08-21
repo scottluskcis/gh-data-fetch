@@ -1,5 +1,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { parse } from 'csv-parse/sync';
+
+/**
+ * Parses CSV content with a header row into string-valued records.
+ */
+export function parseCsvRecords(contents: string): Record<string, string>[] {
+  return parse(contents, {
+    columns: true,
+    bom: true,
+    skip_empty_lines: true,
+    trim: true,
+  }) as Record<string, string>[];
+}
 
 /**
  * Flattens a nested object into a single level object with dot notation keys
