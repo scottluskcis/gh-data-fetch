@@ -2,7 +2,7 @@ import { executeWithOctokit } from '@scottluskcis/octokit-harness';
 import { Option } from 'commander';
 import { executeApiOperation } from '../utils/api-operation.js';
 import { errorMessage } from '../utils/errors.js';
-import { createInventoryOutput } from '../utils/inventory-output.js';
+import { createCsvExport } from '../utils/csv.js';
 import {
   createCommandWithSharedOptions,
   parseBooleanOption,
@@ -89,7 +89,7 @@ completed rows, write <output-file>.errors.csv, and exit nonzero.
       throw new Error('An output path is required through --output-file');
     }
 
-    const output = createInventoryOutput({
+    const output = createCsvExport({
       outputFile: options.outputFile,
       headers: HEADERS,
       force: options.force,
