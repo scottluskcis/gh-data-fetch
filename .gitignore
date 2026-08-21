@@ -29,6 +29,7 @@ logs/
 # Ignore keys and output directories
 keys/
 output/
+audit/
 *_state.json
 
 # Ignore test coverage reports

@@ -119,10 +119,43 @@ export function appendRecordToCsv(
   fs.appendFileSync(filePath, row.join(',') + '\n', 'utf8');
 }
 
+const FORMULA_INJECTION_PREFIXES = ['=', '+', '-', '@'];
+
+/**
+ * Neutralizes values that spreadsheet applications (Excel, Google Sheets)
+ * would otherwise interpret as formulas when a CSV is opened directly.
+ */
+export function sanitizeCsvFormulaValue(value: CsvPrimitive): CsvPrimitive {
+  if (typeof value !== 'string' || value.length === 0) {
+    return value;
+  }
+  return FORMULA_INJECTION_PREFIXES.includes(value[0]) ? `'${value}` : value;
+}
+
 export function validateOutputFile(outputFile: string, force: boolean): string {
   const resolved = path.resolve(outputFile);
   const errorFile = `${resolved}.errors.csv`;
   if (!force && (fs.existsSync(resolved) || fs.existsSync(errorFile))) {
+    throw new Error(
+      `Output already exists for ${resolved}; use --force to replace it`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Resolves and validates a single output path without the paired
+ * `<file>.errors.csv` sidecar convention used by `createCsvExport`. Useful
+ * for commands that write more than one output file (e.g. a CSV plus a
+ * Markdown report) and want every destination validated before anything is
+ * written.
+ */
+export function ensureOutputPathWritable(
+  outputFile: string,
+  force: boolean,
+): string {
+  const resolved = path.resolve(outputFile);
+  if (!force && fs.existsSync(resolved)) {
     throw new Error(
       `Output already exists for ${resolved}; use --force to replace it`,
     );
