@@ -1,15 +1,5 @@
 export const CUSTOM_PROPERTY_BATCH_SIZE = 30;
 
-export function parseBooleanOption(value: string): boolean {
-  if (value === 'true') {
-    return true;
-  }
-  if (value === 'false') {
-    return false;
-  }
-  throw new Error(`Expected "true" or "false", received "${value}"`);
-}
-
 export function resolveCustomPropertyValue(
   propertyValue: unknown,
   clearPropertyValue: unknown,
