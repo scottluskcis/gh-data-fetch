@@ -69,6 +69,24 @@ describe('CSV export', () => {
     );
   });
 
+  it('sanitizes formula values in appended records', () => {
+    const outputFile = temporaryOutput();
+    const output = createCsvExport({
+      outputFile,
+      headers: ['formula', 'nested_formula'],
+      force: false,
+    });
+
+    output.append({
+      formula: '=SUM(A1:A2)',
+      nested: { formula: '@value' },
+    });
+
+    expect(fs.readFileSync(outputFile, 'utf8')).toBe(
+      "formula,nested_formula\n'=SUM(A1:A2),'@value\n",
+    );
+  });
+
   it('rejects existing output unless force is enabled', () => {
     const outputFile = temporaryOutput();
     fs.writeFileSync(outputFile, 'existing');

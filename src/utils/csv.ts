@@ -113,7 +113,9 @@ export function appendRecordToCsv(
   const flattened = flattenObject(record);
 
   // Create row with values in the same order as headers
-  const row = headers.map((header) => escapeCsvValue(flattened[header]));
+  const row = headers.map((header) =>
+    escapeCsvValue(sanitizeCsvFormulaValue(flattened[header])),
+  );
 
   // Append row to file
   fs.appendFileSync(filePath, row.join(',') + '\n', 'utf8');
