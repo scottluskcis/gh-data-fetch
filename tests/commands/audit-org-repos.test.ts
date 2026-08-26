@@ -1,7 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import auditOrgReposCommand from '../../src/commands/audit-org-repos.js';
 
 const temporaryDirectories: string[] = [];
@@ -13,6 +13,7 @@ function tempDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true });
   }
@@ -73,6 +74,42 @@ describe('audit-org-repos command', () => {
     const markdownFile = path.join(directory, 'audit.md');
     expect(fs.existsSync(markdownFile)).toBe(true);
     expect(fs.readFileSync(markdownFile, 'utf8')).toContain('## Summary');
+  });
+
+  it('warns and continues when archive names collide after suffix stripping', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      `${SOURCE_HEADERS}\nacme,one,https://github.com/acme/one,success,123,true\n`,
+    );
+    const archiveFile = writeFile(
+      directory,
+      'archive.csv',
+      [
+        TARGET_HEADERS,
+        'acme-archive,one,https://github.com/acme-archive/one,private,true,2024-01-01T00:00:00Z,',
+        'acme-archive,one-dova,https://github.com/acme-archive/one-dova,private,true,2024-01-01T00:00:00Z,',
+      ].join('\n') + '\n',
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `archive=${archiveFile}`,
+      '--archive-suffix',
+      '-dova',
+      '--output-file',
+      outputFile,
+    ]);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Warning: --target-repo-list archive'),
+    );
+    expect(fs.readFileSync(outputFile, 'utf8')).toContain('one-dova');
   });
 
   it('rejects a target export that resolves to the same file as the source', async () => {
