@@ -304,6 +304,7 @@ describe('buildAuditRecords', () => {
 
   it('warns and prefers the suffixed archive repository when names collide', () => {
     const warnings: string[] = [];
+    const reverseWarnings: string[] = [];
     const records = buildAuditRecords(
       [sourceRepo()],
       {
@@ -317,13 +318,28 @@ describe('buildAuditRecords', () => {
         onWarning: (message) => warnings.push(message),
       },
     );
+    const reverseRecords = buildAuditRecords(
+      [sourceRepo()],
+      {
+        archive: [
+          targetRepo({ repositoryName: 'one-dova' }),
+          targetRepo({ repositoryName: 'one' }),
+        ],
+      },
+      {
+        archiveSuffix: '-dova',
+        onWarning: (message) => reverseWarnings.push(message),
+      },
+    );
 
     expect(records[0].matches[0].repositoryName).toBe('one-dova');
+    expect(reverseRecords[0].matches[0].repositoryName).toBe('one-dova');
     expect(warnings).toEqual([
       expect.stringContaining(
         'duplicate archive target repository name after normalization: "one"; using "one-dova" and ignoring "one"',
       ),
     ]);
+    expect(reverseWarnings).toEqual(warnings);
   });
 });
 

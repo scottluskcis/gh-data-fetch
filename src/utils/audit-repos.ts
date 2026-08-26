@@ -267,7 +267,8 @@ function buildTargetLookup(
     console.warn(`Warning: ${message}`),
 ): Map<string, AuditTargetRepo> {
   const map = new Map<string, AuditTargetRepo>();
-  const archiveSuffixMatches = new Map<string, boolean>();
+  const archiveSuffixMatches =
+    role === 'archive' ? new Set<string>() : undefined;
   for (const repo of repos) {
     let key = normalizeName(repo.repositoryName);
     let matchedArchiveSuffix = false;
@@ -296,7 +297,7 @@ function buildTargetLookup(
         );
       }
       const existingMatchedArchiveSuffix =
-        archiveSuffixMatches.get(key) ?? false;
+        archiveSuffixMatches?.has(key) ?? false;
       const preferCurrent =
         matchedArchiveSuffix && !existingMatchedArchiveSuffix;
       const preferred = preferCurrent ? repo : existing;
@@ -306,12 +307,14 @@ function buildTargetLookup(
       );
       if (preferCurrent) {
         map.set(key, repo);
-        archiveSuffixMatches.set(key, matchedArchiveSuffix);
+        archiveSuffixMatches?.add(key);
       }
       continue;
     }
     map.set(key, repo);
-    archiveSuffixMatches.set(key, matchedArchiveSuffix);
+    if (matchedArchiveSuffix) {
+      archiveSuffixMatches?.add(key);
+    }
   }
   return map;
 }
