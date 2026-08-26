@@ -1,6 +1,21 @@
+import type { RetryConfig } from '@scottluskcis/octokit-harness';
 import { Command, Option } from 'commander';
 
 // Helper functions for parsing
+export function collectOption(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+export function parseBooleanOption(value: string): boolean {
+  if (value === 'true') {
+    return true;
+  }
+  if (value === 'false') {
+    return false;
+  }
+  throw new Error(`Expected "true" or "false", received "${value}"`);
+}
+
 export function parseIntOption(value: string): number {
   const parsed = parseInt(value, 10);
   if (isNaN(parsed)) {
@@ -24,6 +39,22 @@ export function parseRepoListOption(
     const [owner, repo] = fullName.split('/');
     return { owner, repo };
   });
+}
+
+export function retryConfigFromOptions(options: {
+  retryMaxAttempts?: number;
+  retryInitialDelay?: number;
+  retryMaxDelay?: number;
+  retryBackoffFactor?: number;
+  retrySuccessThreshold?: number;
+}): RetryConfig {
+  return {
+    maxAttempts: options.retryMaxAttempts ?? 3,
+    initialDelayMs: options.retryInitialDelay ?? 1000,
+    maxDelayMs: options.retryMaxDelay ?? 30000,
+    backoffFactor: options.retryBackoffFactor ?? 2,
+    successThreshold: options.retrySuccessThreshold ?? 5,
+  };
 }
 
 export function withSharedOptions(cmd: Command): Command {
@@ -150,16 +181,22 @@ export function withSharedOptions(cmd: Command): Command {
       )
       .addOption(
         new Option(
-          '--retry-disabled',
+          '--retry-disabled [boolean]',
           'Disable retry mechanism completely',
-        ).env('RETRY_DISABLED'),
+        )
+          .env('RETRY_DISABLED')
+          .argParser(parseBooleanOption)
+          .default(false),
       )
       // Processing options
       .addOption(
         new Option(
-          '--resume-from-last-save',
+          '--resume-from-last-save [boolean]',
           'Resume from the last saved state',
-        ).env('RESUME_FROM_LAST_SAVE'),
+        )
+          .env('RESUME_FROM_LAST_SAVE')
+          .argParser(parseBooleanOption)
+          .default(false),
       )
       .addOption(
         new Option('--output-file <file>', 'Path to file for output data').env(

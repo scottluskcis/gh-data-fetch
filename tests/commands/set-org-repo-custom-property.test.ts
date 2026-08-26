@@ -1,6 +1,6 @@
 import type { Logger, RetryConfig } from '@scottluskcis/octokit-harness';
 import { describe, expect, it, vi } from 'vitest';
-import { executeApiOperation } from '../../src/commands/set-org-repo-custom-property.js';
+import { executeApiOperation } from '../../src/utils/api-operation.js';
 
 const retryConfig: RetryConfig = {
   maxAttempts: 3,

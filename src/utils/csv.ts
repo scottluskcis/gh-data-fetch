@@ -1,5 +1,35 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { parse } from 'csv-parse/sync';
+
+/**
+ * Parses CSV content with a header row into string-valued records.
+ */
+export function parseCsvRecords(contents: string): Record<string, string>[] {
+  return parse(contents, {
+    columns: true,
+    bom: true,
+    skip_empty_lines: true,
+    trim: true,
+  }) as Record<string, string>[];
+}
+
+export type CsvPrimitive = string | number | boolean | null | undefined;
+
+const ERROR_HEADERS = [
+  'scope',
+  'organization',
+  'page_or_cursor',
+  'operation',
+  'message',
+];
+
+export interface CsvExport {
+  outputFile: string;
+  errorFile: string;
+  append(record: Record<string, CsvPrimitive>): void;
+  appendError(record: Record<string, CsvPrimitive>): void;
+}
 
 /**
  * Flattens a nested object into a single level object with dot notation keys
@@ -83,10 +113,78 @@ export function appendRecordToCsv(
   const flattened = flattenObject(record);
 
   // Create row with values in the same order as headers
-  const row = headers.map((header) => escapeCsvValue(flattened[header]));
+  const row = headers.map((header) =>
+    escapeCsvValue(sanitizeCsvFormulaValue(flattened[header])),
+  );
 
   // Append row to file
   fs.appendFileSync(filePath, row.join(',') + '\n', 'utf8');
+}
+
+const FORMULA_INJECTION_PREFIXES = ['=', '+', '-', '@'];
+
+/**
+ * Neutralizes values that spreadsheet applications (Excel, Google Sheets)
+ * would otherwise interpret as formulas when a CSV is opened directly.
+ */
+export function sanitizeCsvFormulaValue(value: CsvPrimitive): CsvPrimitive {
+  if (typeof value !== 'string' || value.length === 0) {
+    return value;
+  }
+  return FORMULA_INJECTION_PREFIXES.includes(value[0]) ? `'${value}` : value;
+}
+
+export function validateOutputFile(outputFile: string, force: boolean): string {
+  const resolved = path.resolve(outputFile);
+  const errorFile = `${resolved}.errors.csv`;
+  if (!force && (fs.existsSync(resolved) || fs.existsSync(errorFile))) {
+    throw new Error(
+      `Output already exists for ${resolved}; use --force to replace it`,
+    );
+  }
+  return resolved;
+}
+
+/**
+ * Resolves and validates a single output path without the paired
+ * `<file>.errors.csv` sidecar convention used by `createCsvExport`. Useful
+ * for commands that write more than one output file (e.g. a CSV plus a
+ * Markdown report) and want every destination validated before anything is
+ * written.
+ */
+export function ensureOutputPathWritable(
+  outputFile: string,
+  force: boolean,
+): string {
+  const resolved = path.resolve(outputFile);
+  if (!force && fs.existsSync(resolved)) {
+    throw new Error(
+      `Output already exists for ${resolved}; use --force to replace it`,
+    );
+  }
+  return resolved;
+}
+
+export function createCsvExport(options: {
+  outputFile: string;
+  headers: string[];
+  force: boolean;
+}): CsvExport {
+  const outputFile = validateOutputFile(options.outputFile, options.force);
+  const errorFile = `${outputFile}.errors.csv`;
+  initializeCsvFile(outputFile, options.headers);
+  initializeCsvFile(errorFile, ERROR_HEADERS);
+
+  return {
+    outputFile,
+    errorFile,
+    append(record) {
+      appendRecordToCsv(outputFile, record, options.headers);
+    },
+    appendError(record) {
+      appendRecordToCsv(errorFile, record, ERROR_HEADERS);
+    },
+  };
 }
 
 /**
