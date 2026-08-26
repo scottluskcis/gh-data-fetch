@@ -44,12 +44,25 @@ command -v docker >/dev/null 2>&1 || {
     exit 1
 }
 
+docker info >/dev/null 2>&1 || {
+    printf '%s\n' "Docker daemon is not running or not reachable." >&2
+    exit 1
+}
+
 container_ids=$(docker ps -aq --filter "label=devcontainer.local_folder=$workspace_dir")
-volume_exists=$(docker volume ls -q --filter "name=^${volume_name}$")
+if docker volume inspect "$volume_name" >/dev/null 2>&1; then
+    volume_exists=true
+else
+    volume_exists=false
+fi
 
 printf '%s\n' "Workspace: $workspace_dir"
 printf '%s\n' "Containers to remove: ${container_ids:-none}"
-printf '%s\n' "Volume to remove: ${volume_exists:-$volume_name}"
+if [ "$volume_exists" = true ]; then
+    printf '%s\n' "Volume to remove: $volume_name"
+else
+    printf '%s\n' "Volume to remove: none"
+fi
 
 if [ "$confirm" != true ]; then
     printf '%s\n' "Dry run only. Re-run with --yes to remove this workspace's container(s) and the cache volume."
@@ -60,7 +73,7 @@ if [ -n "$container_ids" ]; then
     docker rm -f $container_ids
 fi
 
-if [ -n "$volume_exists" ]; then
+if [ "$volume_exists" = true ]; then
     docker volume rm "$volume_name"
 else
     printf '%s\n' "Volume does not exist; nothing to remove."
