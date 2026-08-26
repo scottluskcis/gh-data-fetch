@@ -263,10 +263,14 @@ function buildTargetLookup(
   repos: AuditTargetRepo[],
   fileLabel: string,
   archiveSuffix?: string,
+  onWarning: (message: string) => void = (message) =>
+    console.warn(`Warning: ${message}`),
 ): Map<string, AuditTargetRepo> {
   const map = new Map<string, AuditTargetRepo>();
+  const archiveSuffixMatches = new Map<string, boolean>();
   for (const repo of repos) {
     let key = normalizeName(repo.repositoryName);
+    let matchedArchiveSuffix = false;
     if (role === 'archive') {
       if (!archiveSuffix) {
         throw new Error(
@@ -281,14 +285,33 @@ function buildTargetLookup(
           );
         }
         key = normalizeName(stripped);
+        matchedArchiveSuffix = true;
       }
     }
-    if (map.has(key)) {
-      throw new Error(
-        `${fileLabel}: duplicate ${role} target repository name after normalization: "${key}"`,
+    const existing = map.get(key);
+    if (existing) {
+      if (role !== 'archive') {
+        throw new Error(
+          `${fileLabel}: duplicate ${role} target repository name after normalization: "${key}"`,
+        );
+      }
+      const existingMatchedArchiveSuffix =
+        archiveSuffixMatches.get(key) ?? false;
+      const preferCurrent =
+        matchedArchiveSuffix && !existingMatchedArchiveSuffix;
+      const preferred = preferCurrent ? repo : existing;
+      const ignored = preferCurrent ? existing : repo;
+      onWarning(
+        `${fileLabel}: duplicate ${role} target repository name after normalization: "${key}"; using "${preferred.repositoryName}" and ignoring "${ignored.repositoryName}"`,
       );
+      if (preferCurrent) {
+        map.set(key, repo);
+        archiveSuffixMatches.set(key, matchedArchiveSuffix);
+      }
+      continue;
     }
     map.set(key, repo);
+    archiveSuffixMatches.set(key, matchedArchiveSuffix);
   }
   return map;
 }
@@ -297,6 +320,7 @@ export interface BuildAuditRecordsOptions {
   archiveSuffix?: string;
   softwareFileLabel?: string;
   archiveFileLabel?: string;
+  onWarning?: (message: string) => void;
 }
 
 /**
@@ -313,6 +337,8 @@ export function buildAuditRecords(
         'software',
         targetsByRole.software,
         options.softwareFileLabel ?? 'software target file',
+        undefined,
+        options.onWarning,
       )
     : undefined;
   const archiveLookup = targetsByRole.archive
@@ -321,6 +347,7 @@ export function buildAuditRecords(
         targetsByRole.archive,
         options.archiveFileLabel ?? 'archive target file',
         options.archiveSuffix,
+        options.onWarning,
       )
     : undefined;
 
@@ -718,4 +745,3 @@ export function renderAuditMarkdown(
 
   return lines.join('\n');
 }
-

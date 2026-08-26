@@ -302,19 +302,28 @@ describe('buildAuditRecords', () => {
     ).toThrow('cannot determine the source repository name');
   });
 
-  it('rejects duplicate target repository names after suffix stripping', () => {
-    expect(() =>
-      buildAuditRecords(
-        [sourceRepo()],
-        {
-          archive: [
-            targetRepo({ repositoryName: 'one-dova' }),
-            targetRepo({ repositoryName: 'One-Dova' }),
-          ],
-        },
-        { archiveSuffix: '-dova' },
+  it('warns and prefers the suffixed archive repository when names collide', () => {
+    const warnings: string[] = [];
+    const records = buildAuditRecords(
+      [sourceRepo()],
+      {
+        archive: [
+          targetRepo({ repositoryName: 'one' }),
+          targetRepo({ repositoryName: 'one-dova' }),
+        ],
+      },
+      {
+        archiveSuffix: '-dova',
+        onWarning: (message) => warnings.push(message),
+      },
+    );
+
+    expect(records[0].matches[0].repositoryName).toBe('one-dova');
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'duplicate archive target repository name after normalization: "one"; using "one-dova" and ignoring "one"',
       ),
-    ).toThrow('duplicate archive target repository name');
+    ]);
   });
 });
 

@@ -146,6 +146,7 @@ required whenever an archive target is supplied.
       archiveSuffix: options.archiveSuffix,
       softwareFileLabel: fileLabelsByRole.software,
       archiveFileLabel: fileLabelsByRole.archive,
+      onWarning: (message) => console.warn(`Warning: ${message}`),
     });
     const summary = summarizeAuditRecords(records);
 
