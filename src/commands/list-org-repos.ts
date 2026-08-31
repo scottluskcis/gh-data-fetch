@@ -6,6 +6,10 @@ import {
 import { Option } from 'commander';
 import type { Octokit } from 'octokit';
 import { executeApiOperation } from '../utils/api-operation.js';
+import {
+  fetchOrgReposWithOpenAlerts,
+  hasOpenSecretScanningAlerts,
+} from '../api/secret-scanning/secret-scanning-alerts.js';
 import { type CsvExport, createCsvExport } from '../utils/csv.js';
 import { errorMessage } from '../utils/errors.js';
 import { resolveOrganizations } from '../utils/github-input.js';
@@ -37,6 +41,7 @@ const HEADERS = [
   'is_locked',
   'lock_reason',
   'is_locked_for_migration',
+  'has_open_secret_scan_alerts',
   'migration_status',
   'migration_issue',
   'custom_properties_json',
@@ -85,6 +90,7 @@ export interface ProcessContext {
   migrationStatusProperty: string;
   migrationIssueProperty: string;
   baseUrl: string;
+  checkSecretScanning: boolean;
 }
 
 const LOCK_QUERY = `query RepositoryLocks($ids: [ID!]!) {
@@ -163,12 +169,92 @@ async function fetchLocks(
   }
 }
 
+interface SecretScanningResult {
+  value: boolean | undefined;
+  error?: string;
+}
+
+/**
+ * Builds a per-organization open secret scanning alert lookup. A single
+ * organization-wide pass is attempted first; when that endpoint is unavailable
+ * (for example secret scanning is disabled or the token lacks scope), the
+ * lookup falls back to one check per repository.
+ */
+function createSecretScanningLookup(
+  context: ProcessContext,
+  organization: string,
+): (repository: RepositoryData) => Promise<SecretScanningResult> {
+  const execute = <T>(operation: () => Promise<T>, description: string) =>
+    executeApiOperation(
+      operation,
+      context.retryConfig,
+      context.retryDisabled,
+      context.logger,
+      description,
+    );
+
+  let orgAlertRepos: Set<string> | undefined;
+  let orgResolved = false;
+
+  return async (repository) => {
+    if (!context.checkSecretScanning) {
+      return { value: undefined };
+    }
+
+    if (!orgResolved) {
+      orgResolved = true;
+      const result = await fetchOrgReposWithOpenAlerts({
+        octokit: context.octokit,
+        org: organization,
+        execute: (operation) =>
+          execute(
+            operation,
+            `Fetching open secret scanning alerts for ${organization}`,
+          ),
+      });
+      if (result.status === 'ok') {
+        orgAlertRepos = result.repositoryFullNames;
+      } else {
+        context.logger.warn(
+          `${result.message}; falling back to per-repository secret scanning checks`,
+        );
+      }
+    }
+
+    if (orgAlertRepos) {
+      return {
+        value: orgAlertRepos.has(repository.full_name.toLowerCase()),
+      };
+    }
+
+    const result = await hasOpenSecretScanningAlerts({
+      octokit: context.octokit,
+      owner: organization,
+      repo: repository.name,
+      execute: (operation) =>
+        execute(
+          operation,
+          `Checking open secret scanning alerts for ${repository.full_name}`,
+        ),
+    });
+    if (result.status === 'ok') {
+      return { value: result.hasOpenAlerts };
+    }
+    context.logger.warn(result.message);
+    return { value: undefined, error: result.message };
+  };
+}
+
 export async function processOrganization(
   context: ProcessContext,
   organization: string,
 ): Promise<string[]> {
   const failures: string[] = [];
   let page = 1;
+  const secretScanningLookup = createSecretScanningLookup(
+    context,
+    organization,
+  );
 
   try {
     while (true) {
@@ -213,6 +299,17 @@ export async function processOrganization(
         const collectionErrors = locks.error
           ? [`repository_lock: ${locks.error}`]
           : [];
+        const secretScanning = await secretScanningLookup(repository);
+        if (secretScanning.error) {
+          collectionErrors.push(`secret_scanning: ${secretScanning.error}`);
+          context.output.appendError({
+            scope: 'repository',
+            organization,
+            page_or_cursor: page,
+            operation: 'check-open-secret-scanning-alerts',
+            message: secretScanning.error,
+          });
+        }
 
         context.output.append({
           api_base_url: context.baseUrl,
@@ -237,6 +334,7 @@ export async function processOrganization(
           is_locked: lock?.isLocked,
           lock_reason: lock?.lockReason,
           is_locked_for_migration: isLockedForMigration(lock),
+          has_open_secret_scan_alerts: secretScanning.value,
           migration_status: customPropertyDisplayValue(
             properties[context.migrationStatusProperty],
           ),
@@ -306,6 +404,15 @@ const listOrgReposCommand = createCommandWithSharedOptions('list-org-repos')
       .default('migration-issue'),
   )
   .addOption(
+    new Option(
+      '--check-secret-scanning [boolean]',
+      'Check each repository for open secret scanning alerts and report them in has_open_secret_scan_alerts',
+    )
+      .env('CHECK_SECRET_SCANNING')
+      .argParser(parseBooleanOption)
+      .default(true),
+  )
+  .addOption(
     new Option('--force [boolean]', 'Replace an existing output and error file')
       .env('FORCE')
       .argParser(parseBooleanOption)
@@ -317,6 +424,9 @@ const listOrgReposCommand = createCommandWithSharedOptions('list-org-repos')
 Requires --output-file and at least one organization source. Repositories are
 written as they are fetched. Partial API failures keep completed rows, write
 <output-file>.errors.csv, and exit nonzero.
+
+has_open_secret_scan_alerts is populated unless --check-secret-scanning false is
+passed; it is left blank when the check could not be completed.
 `,
   )
   .action(async (options) => {
@@ -348,6 +458,7 @@ written as they are fetched. Partial API failures keep completed rows, write
           migrationStatusProperty: options.migrationStatusProperty,
           migrationIssueProperty: options.migrationIssueProperty,
           baseUrl: opts.baseUrl,
+          checkSecretScanning: options.checkSecretScanning !== false,
         };
         const failures: string[] = [];
 

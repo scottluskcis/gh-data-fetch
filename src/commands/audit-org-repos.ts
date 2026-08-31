@@ -10,6 +10,7 @@ import {
   renderAuditCsv,
   renderAuditMarkdown,
   summarizeAuditRecords,
+  SECRET_SCAN_COLUMN,
   type AuditDuplicateGroup,
   type AuditDuplicateReportGroup,
   type AuditTargetRepo,
@@ -79,6 +80,15 @@ const auditOrgReposCommand = new Command('audit-org-repos')
   )
   .addOption(
     new Option(
+      '--check-secret-scanning [boolean]',
+      'Include open secret scanning alert data from the source export (has_open_secret_scan_alerts) in the CSV and Markdown outputs',
+    )
+      .env('CHECK_SECRET_SCANNING')
+      .argParser(parseBooleanOption)
+      .default(true),
+  )
+  .addOption(
+    new Option(
       '--force [boolean]',
       'Allow writing to existing output CSV/Markdown paths',
     )
@@ -93,6 +103,10 @@ Requires --repo-list (source export) and at least one --target-repo-list
 role=path (software and/or archive), plus --output-file. Nothing is written
 until every input and output path has been validated. --archive-suffix is
 required whenever an archive target is supplied.
+
+Open secret scanning alert data comes from the has_open_secret_scan_alerts
+column produced by list-org-repos; exports without that column report
+"unknown". Pass --check-secret-scanning false to omit the data entirely.
 `,
   )
   .action(async (options) => {
@@ -139,6 +153,13 @@ required whenever an archive target is supplied.
     );
     warnAboutDuplicates(source.duplicateGroups, sourceFileLabel);
 
+    const includeSecretScanning = options.checkSecretScanning !== false;
+    if (includeSecretScanning && !source.hasSecretScanColumn) {
+      console.warn(
+        `Warning: ${sourceFileLabel} does not contain a ${SECRET_SCAN_COLUMN} column; open secret scanning alert state will be reported as unknown. Re-run list-org-repos with --check-secret-scanning to collect it`,
+      );
+    }
+
     const targetsByRole: Partial<Record<TargetRole, AuditTargetRepo[]>> = {};
     const targetDuplicateGroups: Partial<
       Record<TargetRole, AuditDuplicateGroup<AuditTargetRepo>[]>
@@ -183,19 +204,25 @@ required whenever an archive target is supplied.
       archiveFileLabel: fileLabelsByRole.archive,
       sourceDuplicateGroups: source.duplicateGroups,
       targetDuplicateGroups,
+      includeSecretScanning,
       onWarning: (message) => console.warn(`Warning: ${message}`),
     });
     const summary = summarizeAuditRecords(records, duplicateReportGroups);
 
     fs.mkdirSync(path.dirname(csvPath), { recursive: true });
     fs.mkdirSync(path.dirname(markdownPath), { recursive: true });
-    fs.writeFileSync(csvPath, renderAuditCsv(records), 'utf8');
+    fs.writeFileSync(
+      csvPath,
+      renderAuditCsv(records, { includeSecretScanning }),
+      'utf8',
+    );
     fs.writeFileSync(
       markdownPath,
       renderAuditMarkdown(records, summary, {
         title: `${source.organization} Repository Migration Audit`,
         migrationIssueUrlPrefix: options.migrationIssueUrlPrefix,
         duplicateGroups: duplicateReportGroups,
+        includeSecretScanning,
       }),
       'utf8',
     );

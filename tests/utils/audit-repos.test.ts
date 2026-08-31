@@ -575,3 +575,115 @@ describe('renderAuditCsv and renderAuditMarkdown', () => {
     expect(markdown).toContain('| public |');
   });
 });
+
+const SOURCE_HEADERS_WITH_SECRET_SCANNING = `${SOURCE_HEADERS},has_open_secret_scan_alerts`;
+
+function secretScanningSourceCsv(rows: string[]): string {
+  return [SOURCE_HEADERS_WITH_SECRET_SCANNING, ...rows].join('\n') + '\n';
+}
+
+describe('open secret scanning alerts', () => {
+  it('parses the optional column as a tri-state value', () => {
+    const result = parseAuditSourceExport(
+      secretScanningSourceCsv([
+        'acme,one,https://github.com/acme/one,not-started,,false,true',
+        'acme,two,https://github.com/acme/two,not-started,,false,false',
+        'acme,three,https://github.com/acme/three,not-started,,false,',
+      ]),
+      'source',
+    );
+    expect(result.hasSecretScanColumn).toBe(true);
+    expect(
+      result.repositories.map((repo) => repo.hasOpenSecretScanAlerts),
+    ).toEqual([true, false, undefined]);
+  });
+
+  it('reports unknown values for exports without the column', () => {
+    const result = parseAuditSourceExport(
+      sourceCsv(['acme,one,https://github.com/acme/one,success,123,true']),
+      'source',
+    );
+    expect(result.hasSecretScanColumn).toBe(false);
+    expect(result.repositories[0].hasOpenSecretScanAlerts).toBeUndefined();
+  });
+
+  it('adds a note for repositories with open alerts and counts them in the summary', () => {
+    const source = parseAuditSourceExport(
+      secretScanningSourceCsv([
+        'acme,one,https://github.com/acme/one,not-started,,false,true',
+        'acme,two,https://github.com/acme/two,not-started,,false,false',
+        'acme,three,https://github.com/acme/three,not-started,,false,',
+      ]),
+      'source',
+    ).repositories;
+    const records = buildAuditRecords(source, {});
+
+    expect(records[0].notes).toContain(AUDIT_NOTES.OPEN_SECRET_SCANNING_ALERTS);
+    expect(records[1].notes).not.toContain(
+      AUDIT_NOTES.OPEN_SECRET_SCANNING_ALERTS,
+    );
+    const summary = summarizeAuditRecords(records);
+    expect(summary.openSecretScanAlertCount).toBe(1);
+    expect(summary.unknownSecretScanCount).toBe(1);
+  });
+
+  it('omits the data entirely when the check is disabled', () => {
+    const source = parseAuditSourceExport(
+      secretScanningSourceCsv([
+        'acme,one,https://github.com/acme/one,not-started,,false,true',
+      ]),
+      'source',
+    ).repositories;
+    const records = buildAuditRecords(
+      source,
+      {},
+      { includeSecretScanning: false },
+    );
+
+    expect(records[0].hasOpenSecretScanAlerts).toBeUndefined();
+    expect(records[0].notes).not.toContain(
+      AUDIT_NOTES.OPEN_SECRET_SCANNING_ALERTS,
+    );
+    expect(
+      renderAuditCsv(records, { includeSecretScanning: false }),
+    ).not.toContain('has_open_secret_scan_alerts');
+    expect(
+      renderAuditMarkdown(records, summarizeAuditRecords(records), {
+        includeSecretScanning: false,
+      }),
+    ).not.toContain('Open Secret Alerts');
+  });
+
+  it('renders the column in the CSV and Markdown outputs', () => {
+    const source = parseAuditSourceExport(
+      secretScanningSourceCsv([
+        'acme,one,https://github.com/acme/one,not-started,,false,true',
+        'acme,two,https://github.com/acme/two,not-started,,false,',
+      ]),
+      'source',
+    ).repositories;
+    const records = buildAuditRecords(source, {});
+
+    const csvLines = renderAuditCsv(records).trim().split('\n');
+    expect(csvLines[0]).toContain('has_open_secret_scan_alerts');
+    const secretIndex = csvLines[0]
+      .split(',')
+      .indexOf('has_open_secret_scan_alerts');
+    expect(csvLines[1].split(',')[secretIndex]).toBe('true');
+    expect(csvLines[2].split(',')[secretIndex]).toBe('');
+
+    const markdown = renderAuditMarkdown(
+      records,
+      summarizeAuditRecords(records),
+      {},
+    );
+    expect(markdown).toContain('Open Secret Alerts (Source)');
+    expect(markdown).toContain(
+      'Repositories with open secret scanning alerts: **1**',
+    );
+    expect(markdown).toContain(
+      'Repositories with unknown secret scanning alert state: **1**',
+    );
+    expect(markdown).toContain('open-secret-scanning-alerts');
+  });
+});
