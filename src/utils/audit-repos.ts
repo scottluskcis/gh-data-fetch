@@ -1,5 +1,9 @@
 import path from 'path';
-import { escapeCsvValue, parseCsvRecords, sanitizeCsvFormulaValue } from './csv.js';
+import {
+  escapeCsvValue,
+  parseCsvRecords,
+  sanitizeCsvFormulaValue,
+} from './csv.js';
 
 export type TargetRole = 'software' | 'archive';
 
@@ -23,6 +27,27 @@ export interface AuditTargetRepo {
   createdAt: string;
   migrationIssue: string;
 }
+
+export interface AuditDuplicateGroup<T> {
+  normalizedName: string;
+  occurrences: T[];
+}
+
+export interface ParsedAuditExport<T> {
+  organization: string;
+  repositories: T[];
+  duplicateGroups: AuditDuplicateGroup<T>[];
+}
+
+export type AuditDuplicateReportGroup =
+  | (AuditDuplicateGroup<AuditSourceRepo> & {
+      inputRole: 'source';
+      fileLabel: string;
+    })
+  | (AuditDuplicateGroup<AuditTargetRepo> & {
+      inputRole: TargetRole;
+      fileLabel: string;
+    });
 
 export interface TargetMatch {
   role: TargetRole;
@@ -49,6 +74,9 @@ export const AUDIT_NOTES = {
   MATCHED_BOTH: 'matched-in-both-orgs',
   ISSUE_MISMATCH: 'migration-issue-mismatch',
   SUCCESS_NO_MATCH: 'status-success-but-no-match-found',
+  DUPLICATE_SOURCE: 'duplicate-source-repository-row',
+  DUPLICATE_SOFTWARE_TARGET: 'duplicate-software-target-repository-row',
+  DUPLICATE_ARCHIVE_TARGET: 'duplicate-archive-target-repository-row',
 } as const;
 
 function normalizeName(name: string): string {
@@ -95,7 +123,9 @@ function requireSingleOrganization(
     records.map((record) => record.organization_login.trim()).filter(Boolean),
   );
   if (organizations.size === 0) {
-    throw new Error(`${fileLabel} does not contain an organization_login value`);
+    throw new Error(
+      `${fileLabel} does not contain an organization_login value`,
+    );
   }
   if (organizations.size > 1) {
     throw new Error(
@@ -107,20 +137,29 @@ function requireSingleOrganization(
   return [...organizations][0];
 }
 
-function rejectDuplicateNames(names: string[], fileLabel: string): void {
-  const seen = new Map<string, string>();
-  for (const name of names) {
-    const key = normalizeName(name);
-    const existing = seen.get(key);
-    if (existing !== undefined) {
-      throw new Error(
-        existing === name
-          ? `${fileLabel} contains a duplicate repository name: "${name}"`
-          : `${fileLabel} contains duplicate repository names "${existing}" and "${name}" that normalize to the same value`,
-      );
-    }
-    seen.set(key, name);
+function canonicalizeByRepositoryName<T extends { repositoryName: string }>(
+  repositories: T[],
+): {
+  repositories: T[];
+  duplicateGroups: AuditDuplicateGroup<T>[];
+} {
+  const groups = new Map<string, T[]>();
+  for (const repository of repositories) {
+    const key = normalizeName(repository.repositoryName);
+    const occurrences = groups.get(key) ?? [];
+    occurrences.push(repository);
+    groups.set(key, occurrences);
   }
+
+  return {
+    repositories: [...groups.values()].map(([first]) => first),
+    duplicateGroups: [...groups.entries()]
+      .filter(([, occurrences]) => occurrences.length > 1)
+      .map(([normalizedName, occurrences]) => ({
+        normalizedName,
+        occurrences,
+      })),
+  };
 }
 
 /**
@@ -130,7 +169,7 @@ function rejectDuplicateNames(names: string[], fileLabel: string): void {
 export function parseAuditSourceExport(
   contents: string,
   fileLabel: string,
-): { organization: string; repositories: AuditSourceRepo[] } {
+): ParsedAuditExport<AuditSourceRepo> {
   const records = parseCsvRecords(contents);
   requireHeaders(
     records,
@@ -148,28 +187,28 @@ export function parseAuditSourceExport(
     records as { organization_login: string }[],
     fileLabel,
   );
-  rejectDuplicateNames(
-    records.map((record) => record.repository_name.trim()),
-    fileLabel,
-  );
+  const parsedRepositories = records.map((record) => ({
+    organization: record.organization_login.trim(),
+    repositoryName: record.repository_name.trim(),
+    url: record.repository_url?.trim() ?? '',
+    migrationStatus: record.migration_status?.trim() ?? '',
+    migrationIssue: record.migration_issue?.trim() ?? '',
+    isLocked: parseTriStateBoolean(record.is_locked),
+  }));
+  const { repositories, duplicateGroups } =
+    canonicalizeByRepositoryName(parsedRepositories);
 
   return {
     organization,
-    repositories: records.map((record) => ({
-      organization: record.organization_login.trim(),
-      repositoryName: record.repository_name.trim(),
-      url: record.repository_url?.trim() ?? '',
-      migrationStatus: record.migration_status?.trim() ?? '',
-      migrationIssue: record.migration_issue?.trim() ?? '',
-      isLocked: parseTriStateBoolean(record.is_locked),
-    })),
+    repositories,
+    duplicateGroups,
   };
 }
 
 export function parseAuditTargetExport(
   contents: string,
   fileLabel: string,
-): { organization: string; repositories: AuditTargetRepo[] } {
+): ParsedAuditExport<AuditTargetRepo> {
   const records = parseCsvRecords(contents);
   requireHeaders(
     records,
@@ -187,22 +226,22 @@ export function parseAuditTargetExport(
     records as { organization_login: string }[],
     fileLabel,
   );
-  rejectDuplicateNames(
-    records.map((record) => record.repository_name.trim()),
-    fileLabel,
-  );
+  const parsedRepositories = records.map((record) => ({
+    organization: record.organization_login.trim(),
+    repositoryName: record.repository_name.trim(),
+    url: record.repository_url?.trim() ?? '',
+    visibility: record.visibility?.trim() ?? '',
+    archived: parseTriStateBoolean(record.archived),
+    createdAt: record.created_at?.trim() ?? '',
+    migrationIssue: record.migration_issue?.trim() ?? '',
+  }));
+  const { repositories, duplicateGroups } =
+    canonicalizeByRepositoryName(parsedRepositories);
 
   return {
     organization,
-    repositories: records.map((record) => ({
-      organization: record.organization_login.trim(),
-      repositoryName: record.repository_name.trim(),
-      url: record.repository_url?.trim() ?? '',
-      visibility: record.visibility?.trim() ?? '',
-      archived: parseTriStateBoolean(record.archived),
-      createdAt: record.created_at?.trim() ?? '',
-      migrationIssue: record.migration_issue?.trim() ?? '',
-    })),
+    repositories,
+    duplicateGroups,
   };
 }
 
@@ -324,6 +363,10 @@ export interface BuildAuditRecordsOptions {
   softwareFileLabel?: string;
   archiveFileLabel?: string;
   onWarning?: (message: string) => void;
+  sourceDuplicateGroups?: AuditDuplicateGroup<AuditSourceRepo>[];
+  targetDuplicateGroups?: Partial<
+    Record<TargetRole, AuditDuplicateGroup<AuditTargetRepo>[]>
+  >;
 }
 
 /**
@@ -335,6 +378,22 @@ export function buildAuditRecords(
   targetsByRole: Partial<Record<TargetRole, AuditTargetRepo[]>>,
   options: BuildAuditRecordsOptions = {},
 ): AuditRecord[] {
+  const sourceDuplicateNames = new Set(
+    options.sourceDuplicateGroups?.map((group) => group.normalizedName) ?? [],
+  );
+  const softwareDuplicateNames = new Set(
+    options.targetDuplicateGroups?.software?.map(
+      (group) => group.normalizedName,
+    ) ?? [],
+  );
+  const archiveDuplicateNames = new Set(
+    options.targetDuplicateGroups?.archive?.map((group) => {
+      const stripped = options.archiveSuffix
+        ? stripArchiveSuffix(group.normalizedName, options.archiveSuffix)
+        : null;
+      return normalizeName(stripped ?? group.normalizedName);
+    }) ?? [],
+  );
   const softwareLookup = targetsByRole.software
     ? buildTargetLookup(
         'software',
@@ -358,6 +417,9 @@ export function buildAuditRecords(
     const key = normalizeName(repo.repositoryName);
     const matches: TargetMatch[] = [];
     const notes: string[] = [];
+    if (sourceDuplicateNames.has(key)) {
+      notes.push(AUDIT_NOTES.DUPLICATE_SOURCE);
+    }
 
     const softwareMatch = softwareLookup?.get(key);
     if (softwareMatch) {
@@ -370,6 +432,11 @@ export function buildAuditRecords(
         archived: softwareMatch.archived,
         createdAt: softwareMatch.createdAt,
       });
+      if (
+        softwareDuplicateNames.has(normalizeName(softwareMatch.repositoryName))
+      ) {
+        notes.push(AUDIT_NOTES.DUPLICATE_SOFTWARE_TARGET);
+      }
       const sourceIssue = repo.migrationIssue;
       const targetIssue = softwareMatch.migrationIssue;
       if (sourceIssue && targetIssue && sourceIssue !== targetIssue) {
@@ -388,6 +455,9 @@ export function buildAuditRecords(
         archived: archiveMatch.archived,
         createdAt: archiveMatch.createdAt,
       });
+      if (archiveDuplicateNames.has(key)) {
+        notes.push(AUDIT_NOTES.DUPLICATE_ARCHIVE_TARGET);
+      }
     }
 
     if (matches.length > 1) {
@@ -415,13 +485,14 @@ export function buildAuditRecords(
 }
 
 export function targetRoleLabel(matches: TargetMatch[]): string {
-  if (matches.length === 0) {
+  const roles = new Set(matches.map((match) => match.role));
+  if (roles.size === 0) {
     return 'none';
   }
-  if (matches.length > 1) {
+  if (roles.size > 1) {
     return 'both';
   }
-  return matches[0].role;
+  return [...roles][0];
 }
 
 function joinMatchField(
@@ -455,14 +526,15 @@ function lockedDisplayValue(value: boolean | undefined): string {
  * Renders an audit record into a flat CSV row, sanitizing every string
  * value against spreadsheet formula injection.
  */
-export function toAuditCsvRecord(
-  record: AuditRecord,
-): Record<string, string> {
+export function toAuditCsvRecord(record: AuditRecord): Record<string, string> {
   const raw: Record<string, string> = {
     repo_name: record.repoName,
     source_org: record.sourceOrg,
     source_url: record.sourceUrl,
-    migrated_to_org: joinMatchField(record.matches, (match) => match.organization),
+    migrated_to_org: joinMatchField(
+      record.matches,
+      (match) => match.organization,
+    ),
     target_org: targetRoleLabel(record.matches),
     migration_status: record.migrationStatus,
     migration_issue: record.migrationIssue,
@@ -520,9 +592,7 @@ export function renderAuditCsv(records: AuditRecord[]): string {
   const lines = [AUDIT_CSV_HEADERS.map(escapeCsvValue).join(',')];
   for (const row of rows) {
     lines.push(
-      AUDIT_CSV_HEADERS.map((header) => escapeCsvValue(row[header])).join(
-        ',',
-      ),
+      AUDIT_CSV_HEADERS.map((header) => escapeCsvValue(row[header])).join(','),
     );
   }
   return lines.join('\n') + '\n';
@@ -533,15 +603,21 @@ export interface AuditSummary {
   byStatus: Record<string, number>;
   byTargetLabel: Record<string, number>;
   anomalyCount: number;
+  duplicateGroupCount: number;
+  duplicateExtraRowCount: number;
 }
 
-export function summarizeAuditRecords(records: AuditRecord[]): AuditSummary {
+export function summarizeAuditRecords(
+  records: AuditRecord[],
+  duplicateGroups: AuditDuplicateReportGroup[] = [],
+): AuditSummary {
   const byStatus: Record<string, number> = {};
   const byTargetLabel: Record<string, number> = {};
   let anomalyCount = 0;
 
   for (const record of records) {
-    const statusKey = record.migrationStatus.trim().toLowerCase() || '(unknown)';
+    const statusKey =
+      record.migrationStatus.trim().toLowerCase() || '(unknown)';
     byStatus[statusKey] = (byStatus[statusKey] ?? 0) + 1;
 
     const targetLabel = targetRoleLabel(record.matches);
@@ -557,20 +633,30 @@ export function summarizeAuditRecords(records: AuditRecord[]): AuditSummary {
     byStatus,
     byTargetLabel,
     anomalyCount,
+    duplicateGroupCount: duplicateGroups.length,
+    duplicateExtraRowCount: duplicateGroups.reduce(
+      (count, group) => count + group.occurrences.length - 1,
+      0,
+    ),
   };
 }
 
-const STATUS_DISPLAY_ORDER = ['success', 'in-progress', 'not-started', 'failure'];
+const STATUS_DISPLAY_ORDER = [
+  'success',
+  'in-progress',
+  'not-started',
+  'failure',
+];
 const TARGET_LABEL_DISPLAY_ORDER = ['software', 'archive', 'both', 'none'];
 
-function orderedKeys(
-  present: string[],
-  preferredOrder: string[],
-): string[] {
+function orderedKeys(present: string[], preferredOrder: string[]): string[] {
   const remaining = present
     .filter((key) => !preferredOrder.includes(key))
     .sort((left, right) => left.localeCompare(right));
-  return [...preferredOrder.filter((key) => present.includes(key)), ...remaining];
+  return [
+    ...preferredOrder.filter((key) => present.includes(key)),
+    ...remaining,
+  ];
 }
 
 function escapeMarkdown(value: string): string {
@@ -629,7 +715,9 @@ function renderArchivedValues(matches: TargetMatch[]): string {
     return '';
   }
   return matches
-    .map((match) => (match.archived === undefined ? 'unknown' : String(match.archived)))
+    .map((match) =>
+      match.archived === undefined ? 'unknown' : String(match.archived),
+    )
     .join(', ');
 }
 
@@ -648,6 +736,55 @@ function capitalize(value: string): string {
 export interface RenderMarkdownOptions {
   title?: string;
   migrationIssueUrlPrefix?: string;
+  duplicateGroups?: AuditDuplicateReportGroup[];
+}
+
+function renderDuplicateGroups(
+  lines: string[],
+  duplicateGroups: AuditDuplicateReportGroup[],
+): void {
+  lines.push('## Duplicate repository rows', '');
+  if (duplicateGroups.length === 0) {
+    lines.push('No duplicate repository rows found.', '');
+    return;
+  }
+
+  for (const group of duplicateGroups) {
+    const roleLabel =
+      group.inputRole === 'source'
+        ? 'Source'
+        : `${capitalize(group.inputRole)} target`;
+    lines.push('<details>');
+    lines.push(
+      `<summary>${roleLabel}: ${escapeMarkdown(group.normalizedName)} (${group.occurrences.length} rows; canonical row 1)</summary>`,
+    );
+    lines.push('');
+    lines.push(`Input: \`${escapeMarkdown(group.fileLabel)}\``, '');
+
+    if (group.inputRole === 'source') {
+      lines.push(
+        '| Row | Organization | Repository | Migration Status | Migration Issue | Locked |',
+      );
+      lines.push('| --- | --- | --- | --- | --- | --- |');
+      group.occurrences.forEach((occurrence, index) => {
+        lines.push(
+          `| ${index + 1} | ${escapeMarkdown(occurrence.organization)} | ${markdownLink(occurrence.repositoryName, occurrence.url)} | ${escapeMarkdown(occurrence.migrationStatus)} | ${escapeMarkdown(occurrence.migrationIssue)} | ${renderLockedValue(occurrence.isLocked)} |`,
+        );
+      });
+    } else {
+      lines.push(
+        '| Row | Organization | Repository | Visibility | Archived | Created At | Migration Issue |',
+      );
+      lines.push('| --- | --- | --- | --- | --- | --- | --- |');
+      group.occurrences.forEach((occurrence, index) => {
+        lines.push(
+          `| ${index + 1} | ${escapeMarkdown(occurrence.organization)} | ${markdownLink(occurrence.repositoryName, occurrence.url)} | ${escapeMarkdown(occurrence.visibility)} | ${occurrence.archived === undefined ? 'unknown' : occurrence.archived} | ${escapeMarkdown(occurrence.createdAt)} | ${escapeMarkdown(occurrence.migrationIssue)} |`,
+        );
+      });
+    }
+    lines.push('');
+    lines.push('</details>', '');
+  }
 }
 
 /**
@@ -683,15 +820,30 @@ export function renderAuditMarkdown(
     Object.keys(summary.byTargetLabel),
     TARGET_LABEL_DISPLAY_ORDER,
   )) {
-    lines.push(`| ${escapeMarkdown(target)} | ${summary.byTargetLabel[target]} |`);
+    lines.push(
+      `| ${escapeMarkdown(target)} | ${summary.byTargetLabel[target]} |`,
+    );
   }
-  lines.push('', `Repositories with anomaly notes: **${summary.anomalyCount}**`, '');
+  lines.push(
+    '',
+    `Repositories with anomaly notes: **${summary.anomalyCount}**`,
+    '',
+  );
+  lines.push(
+    `Duplicate repository groups: **${summary.duplicateGroupCount}**`,
+    '',
+  );
+  lines.push(
+    `Additional duplicate rows: **${summary.duplicateExtraRowCount}**`,
+    '',
+  );
 
   lines.push('## Repositories by status and target', '');
 
   const statusGroups = new Map<string, AuditRecord[]>();
   for (const record of records) {
-    const statusKey = record.migrationStatus.trim().toLowerCase() || '(unknown)';
+    const statusKey =
+      record.migrationStatus.trim().toLowerCase() || '(unknown)';
     const bucket = statusGroups.get(statusKey) ?? [];
     bucket.push(record);
     statusGroups.set(statusKey, bucket);
@@ -745,6 +897,8 @@ export function renderAuditMarkdown(
       lines.push('</details>', '');
     }
   }
+
+  renderDuplicateGroups(lines, options.duplicateGroups ?? []);
 
   return lines.join('\n');
 }

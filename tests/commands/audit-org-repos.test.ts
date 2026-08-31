@@ -76,6 +76,57 @@ describe('audit-org-repos command', () => {
     expect(fs.readFileSync(markdownFile, 'utf8')).toContain('## Summary');
   });
 
+  it('warns, reports, and continues when a target export has duplicate rows', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      [
+        SOURCE_HEADERS,
+        'acme,one,https://github.com/acme/one,success,123,true',
+        'acme,One,https://github.com/acme/one-copy,failure,999,false',
+      ].join('\n') + '\n',
+    );
+    const softwareFile = writeFile(
+      directory,
+      'software.csv',
+      [
+        TARGET_HEADERS,
+        'acme-software,One,https://github.com/acme-software/one,private,false,2024-01-01T00:00:00Z,123',
+        'acme-software, one ,https://github.com/acme-software/one-copy,public,true,2024-02-01T00:00:00Z,999',
+      ].join('\n') + '\n',
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `software=${softwareFile}`,
+      '--output-file',
+      outputFile,
+    ]);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('contains 2 rows for repository name "one"'),
+    );
+    const csvLines = fs.readFileSync(outputFile, 'utf8').trim().split('\n');
+    expect(csvLines).toHaveLength(2);
+    expect(csvLines[1]).toContain('duplicate-source-repository-row');
+    expect(csvLines[1]).toContain('duplicate-software-target-repository-row');
+
+    const markdown = fs.readFileSync(path.join(directory, 'audit.md'), 'utf8');
+    expect(markdown).toContain('Duplicate repository groups: **2**');
+    expect(markdown).toContain('Additional duplicate rows: **2**');
+    expect(markdown).toContain('[one](https://github.com/acme/one)');
+    expect(markdown).toContain('[One](https://github.com/acme/one-copy)');
+    expect(markdown).toContain('[One](https://github.com/acme-software/one)');
+    expect(markdown).toContain(
+      '[one](https://github.com/acme-software/one-copy)',
+    );
+  });
+
   it('warns and continues when archive names collide after suffix stripping', async () => {
     const directory = tempDir();
     const sourceFile = writeFile(

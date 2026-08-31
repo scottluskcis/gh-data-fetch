@@ -69,7 +69,10 @@ describe('parseAuditSourceExport', () => {
 
   it('requires required headers', () => {
     expect(() =>
-      parseAuditSourceExport('organization_login,repository_name\nacme,one\n', 'source'),
+      parseAuditSourceExport(
+        'organization_login,repository_name\nacme,one\n',
+        'source',
+      ),
     ).toThrow('missing required column');
   });
 
@@ -91,16 +94,35 @@ describe('parseAuditSourceExport', () => {
     ).toThrow('single organization_login value');
   });
 
-  it('rejects duplicate repository names (case-insensitive)', () => {
-    expect(() =>
-      parseAuditSourceExport(
-        sourceCsv([
-          'acme,One,https://github.com/acme/one,success,123,true',
-          'acme,one,https://github.com/acme/one,success,123,true',
-        ]),
-        'source',
-      ),
-    ).toThrow('duplicate repository name');
+  it('canonicalizes duplicate repository names and preserves every occurrence', () => {
+    const result = parseAuditSourceExport(
+      sourceCsv([
+        'acme,One,https://github.com/acme/one,success,123,true',
+        'acme, one ,https://github.com/acme/one-copy,failure,999,false',
+      ]),
+      'source',
+    );
+
+    expect(result.repositories).toHaveLength(1);
+    expect(result.repositories[0]).toMatchObject({
+      repositoryName: 'One',
+      migrationStatus: 'success',
+    });
+    expect(result.duplicateGroups).toEqual([
+      {
+        normalizedName: 'one',
+        occurrences: [
+          expect.objectContaining({
+            repositoryName: 'One',
+            migrationStatus: 'success',
+          }),
+          expect.objectContaining({
+            repositoryName: 'one',
+            migrationStatus: 'failure',
+          }),
+        ],
+      },
+    ]);
   });
 });
 
@@ -114,6 +136,26 @@ describe('parseAuditTargetExport', () => {
     );
     expect(result.organization).toBe('acme-software');
     expect(result.repositories[0].migrationIssue).toBe('123');
+  });
+
+  it('canonicalizes target duplicates and retains conflicting rows', () => {
+    const result = parseAuditTargetExport(
+      targetCsv([
+        'acme-software,One,https://github.com/acme-software/one,private,false,2024-01-01T00:00:00Z,123',
+        'acme-software,one,https://github.com/acme-software/one-copy,public,true,2024-02-01T00:00:00Z,999',
+      ]),
+      'software target',
+    );
+
+    expect(result.repositories).toHaveLength(1);
+    expect(result.repositories[0]).toMatchObject({
+      repositoryName: 'One',
+      visibility: 'private',
+    });
+    expect(result.duplicateGroups[0]).toMatchObject({
+      normalizedName: 'one',
+      occurrences: [{ visibility: 'private' }, { visibility: 'public' }],
+    });
   });
 });
 
@@ -249,39 +291,74 @@ describe('buildAuditRecords', () => {
   });
 
   it('flags status=success with no match as an anomaly', () => {
-    const records = buildAuditRecords([sourceRepo({ migrationStatus: 'success' })], {});
+    const records = buildAuditRecords(
+      [sourceRepo({ migrationStatus: 'success' })],
+      {},
+    );
     expect(records[0].notes).toEqual([AUDIT_NOTES.SUCCESS_NO_MATCH]);
   });
 
   it('does not flag a pending status with no match', () => {
     for (const status of ['not-started', 'in-progress', 'failure']) {
-      const records = buildAuditRecords([sourceRepo({ migrationStatus: status })], {});
+      const records = buildAuditRecords(
+        [sourceRepo({ migrationStatus: status })],
+        {},
+      );
       expect(records[0].notes).toEqual([]);
     }
   });
 
   it('flags a migration_issue mismatch against the software target', () => {
-    const records = buildAuditRecords(
-      [sourceRepo({ migrationIssue: '123' })],
-      { software: [targetRepo({ migrationIssue: '999' })] },
-    );
+    const records = buildAuditRecords([sourceRepo({ migrationIssue: '123' })], {
+      software: [targetRepo({ migrationIssue: '999' })],
+    });
     expect(records[0].notes).toContain(AUDIT_NOTES.ISSUE_MISMATCH);
   });
 
   it('does not flag a mismatch when either issue value is blank', () => {
-    const records = buildAuditRecords(
-      [sourceRepo({ migrationIssue: '' })],
-      { software: [targetRepo({ migrationIssue: '999' })] },
-    );
+    const records = buildAuditRecords([sourceRepo({ migrationIssue: '' })], {
+      software: [targetRepo({ migrationIssue: '999' })],
+    });
     expect(records[0].notes).not.toContain(AUDIT_NOTES.ISSUE_MISMATCH);
   });
 
   it('matches names case-insensitively', () => {
-    const records = buildAuditRecords(
-      [sourceRepo({ repositoryName: 'One' })],
-      { software: [targetRepo({ repositoryName: 'ONE' })] },
-    );
+    const records = buildAuditRecords([sourceRepo({ repositoryName: 'One' })], {
+      software: [targetRepo({ repositoryName: 'ONE' })],
+    });
     expect(targetRoleLabel(records[0].matches)).toBe('software');
+  });
+
+  it('adds duplicate anomaly notes to the canonical audit record', () => {
+    const sourceDuplicate = {
+      normalizedName: 'one',
+      occurrences: [sourceRepo(), sourceRepo({ migrationStatus: 'failure' })],
+    };
+    const targetDuplicate = {
+      normalizedName: 'one',
+      occurrences: [targetRepo(), targetRepo({ visibility: 'public' })],
+    };
+    const records = buildAuditRecords(
+      [sourceDuplicate.occurrences[0]],
+      { software: [targetDuplicate.occurrences[0]] },
+      {
+        sourceDuplicateGroups: [sourceDuplicate],
+        targetDuplicateGroups: { software: [targetDuplicate] },
+      },
+    );
+
+    expect(records[0].notes).toEqual([
+      AUDIT_NOTES.DUPLICATE_SOURCE,
+      AUDIT_NOTES.DUPLICATE_SOFTWARE_TARGET,
+    ]);
+  });
+
+  it('derives target labels from distinct roles rather than match count', () => {
+    const match = buildAuditRecords([sourceRepo()], {
+      software: [targetRepo()],
+    })[0].matches[0];
+
+    expect(targetRoleLabel([match, match])).toBe('software');
   });
 
   it('requires --archive-suffix when an archive target is provided', () => {
@@ -341,6 +418,46 @@ describe('buildAuditRecords', () => {
     ]);
     expect(reverseWarnings).toEqual(warnings);
   });
+
+  it('retains an archive duplicate note when suffix resolution selects another row', () => {
+    const unsuffixed = targetRepo({
+      organization: 'acme-archive',
+      repositoryName: 'one',
+    });
+    const records = buildAuditRecords(
+      [sourceRepo()],
+      {
+        archive: [
+          unsuffixed,
+          targetRepo({
+            organization: 'acme-archive',
+            repositoryName: 'one-dova',
+          }),
+        ],
+      },
+      {
+        archiveSuffix: '-dova',
+        targetDuplicateGroups: {
+          archive: [
+            {
+              normalizedName: 'one',
+              occurrences: [
+                unsuffixed,
+                targetRepo({
+                  organization: 'acme-archive',
+                  repositoryName: 'ONE',
+                }),
+              ],
+            },
+          ],
+        },
+        onWarning: () => {},
+      },
+    );
+
+    expect(records[0].matches[0].repositoryName).toBe('one-dova');
+    expect(records[0].notes).toContain(AUDIT_NOTES.DUPLICATE_ARCHIVE_TARGET);
+  });
 });
 
 describe('toAuditCsvRecord', () => {
@@ -349,7 +466,12 @@ describe('toAuditCsvRecord', () => {
       [sourceRepo({ repositoryName: '=cmd' })],
       {
         software: [targetRepo({ repositoryName: '=cmd' })],
-        archive: [targetRepo({ organization: 'acme-archive', repositoryName: '=cmd-dova' })],
+        archive: [
+          targetRepo({
+            organization: 'acme-archive',
+            repositoryName: '=cmd-dova',
+          }),
+        ],
       },
       { archiveSuffix: '-dova' },
     );
@@ -374,6 +496,8 @@ describe('summarizeAuditRecords', () => {
     expect(summary.byStatus).toEqual({ success: 1, 'not-started': 1 });
     expect(summary.byTargetLabel).toEqual({ software: 1, none: 1 });
     expect(summary.anomalyCount).toBe(0);
+    expect(summary.duplicateGroupCount).toBe(0);
+    expect(summary.duplicateExtraRowCount).toBe(0);
   });
 });
 
@@ -410,7 +534,44 @@ describe('renderAuditCsv and renderAuditMarkdown', () => {
     });
     expect(markdown).toContain('## Summary');
     expect(markdown).toContain('<details>');
-    expect(markdown).toContain('[#123](https://github.com/acme/one/issues/123)');
+    expect(markdown).toContain(
+      '[#123](https://github.com/acme/one/issues/123)',
+    );
     expect(markdown).toContain('[one](https://github.com/acme/one)');
+  });
+
+  it('renders every duplicate occurrence without inflating repository totals', () => {
+    const records = buildAuditRecords([sourceRepo()], {
+      software: [targetRepo()],
+    });
+    const duplicateGroups = [
+      {
+        inputRole: 'software' as const,
+        fileLabel: 'software target',
+        normalizedName: 'one',
+        occurrences: [
+          targetRepo(),
+          targetRepo({
+            url: 'https://github.com/acme-software/one-copy',
+            visibility: 'public',
+          }),
+        ],
+      },
+    ];
+    const summary = summarizeAuditRecords(records, duplicateGroups);
+    const markdown = renderAuditMarkdown(records, summary, {
+      duplicateGroups,
+    });
+
+    expect(summary.totalRepos).toBe(1);
+    expect(summary.duplicateGroupCount).toBe(1);
+    expect(summary.duplicateExtraRowCount).toBe(1);
+    expect(markdown).toContain('## Duplicate repository rows');
+    expect(markdown).toContain('canonical row 1');
+    expect(markdown).toContain('[one](https://github.com/acme-software/one)');
+    expect(markdown).toContain(
+      '[one](https://github.com/acme-software/one-copy)',
+    );
+    expect(markdown).toContain('| public |');
   });
 });

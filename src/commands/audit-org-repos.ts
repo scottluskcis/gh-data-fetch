@@ -10,12 +10,25 @@ import {
   renderAuditCsv,
   renderAuditMarkdown,
   summarizeAuditRecords,
+  type AuditDuplicateGroup,
+  type AuditDuplicateReportGroup,
   type AuditTargetRepo,
   type TargetRepoListEntry,
   type TargetRole,
 } from '../utils/audit-repos.js';
 import { ensureOutputPathWritable } from '../utils/csv.js';
 import { parseBooleanOption } from './command-helpers.js';
+
+function warnAboutDuplicates<T>(
+  duplicateGroups: AuditDuplicateGroup<T>[],
+  fileLabel: string,
+): void {
+  for (const group of duplicateGroups) {
+    console.warn(
+      `Warning: ${fileLabel} contains ${group.occurrences.length} rows for repository name "${group.normalizedName}" after trimming and case normalization; retaining the first row as the canonical occurrence and preserving all rows in the Markdown duplicate report`,
+    );
+  }
+}
 
 /**
  * `audit-org-repos` is a pure local file-diff/report command: it never talks
@@ -119,12 +132,23 @@ required whenever an archive target is supplied.
       options.force,
     );
 
+    const sourceFileLabel = `--repo-list (${repoListPath})`;
     const source = parseAuditSourceExport(
       fs.readFileSync(repoListPath, 'utf8'),
-      `--repo-list (${repoListPath})`,
+      sourceFileLabel,
     );
+    warnAboutDuplicates(source.duplicateGroups, sourceFileLabel);
 
     const targetsByRole: Partial<Record<TargetRole, AuditTargetRepo[]>> = {};
+    const targetDuplicateGroups: Partial<
+      Record<TargetRole, AuditDuplicateGroup<AuditTargetRepo>[]>
+    > = {};
+    const duplicateReportGroups: AuditDuplicateReportGroup[] =
+      source.duplicateGroups.map((group) => ({
+        ...group,
+        inputRole: 'source',
+        fileLabel: sourceFileLabel,
+      }));
     const fileLabelsByRole: Partial<Record<TargetRole, string>> = {};
     for (const entry of targetEntries) {
       const resolvedPath = path.resolve(entry.path);
@@ -133,12 +157,23 @@ required whenever an archive target is supplied.
         fs.readFileSync(resolvedPath, 'utf8'),
         fileLabel,
       );
-      if (target.organization.toLowerCase() === source.organization.toLowerCase()) {
+      if (
+        target.organization.toLowerCase() === source.organization.toLowerCase()
+      ) {
         throw new Error(
           `${fileLabel} has the same organization ("${target.organization}") as the source export; a target cannot be the source organization`,
         );
       }
+      warnAboutDuplicates(target.duplicateGroups, fileLabel);
       targetsByRole[entry.role] = target.repositories;
+      targetDuplicateGroups[entry.role] = target.duplicateGroups;
+      duplicateReportGroups.push(
+        ...target.duplicateGroups.map((group) => ({
+          ...group,
+          inputRole: entry.role,
+          fileLabel,
+        })),
+      );
       fileLabelsByRole[entry.role] = fileLabel;
     }
 
@@ -146,9 +181,11 @@ required whenever an archive target is supplied.
       archiveSuffix: options.archiveSuffix,
       softwareFileLabel: fileLabelsByRole.software,
       archiveFileLabel: fileLabelsByRole.archive,
+      sourceDuplicateGroups: source.duplicateGroups,
+      targetDuplicateGroups,
       onWarning: (message) => console.warn(`Warning: ${message}`),
     });
-    const summary = summarizeAuditRecords(records);
+    const summary = summarizeAuditRecords(records, duplicateReportGroups);
 
     fs.mkdirSync(path.dirname(csvPath), { recursive: true });
     fs.mkdirSync(path.dirname(markdownPath), { recursive: true });
@@ -158,6 +195,7 @@ required whenever an archive target is supplied.
       renderAuditMarkdown(records, summary, {
         title: `${source.organization} Repository Migration Audit`,
         migrationIssueUrlPrefix: options.migrationIssueUrlPrefix,
+        duplicateGroups: duplicateReportGroups,
       }),
       'utf8',
     );
