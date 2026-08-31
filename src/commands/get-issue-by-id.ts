@@ -92,8 +92,8 @@ export function formatIssueHuman(issue: IssueDetails): string {
     `Milestone: ${issue.milestone?.title ?? 'none'}`,
     `Created: ${issue.created_at}`,
     `Updated: ${issue.updated_at}`,
-    `Closed: ${issue.closed_at ?? 'open'}`,
-    `Type: ${issue.pull_request ? 'pull request' : 'issue'}`,
+    `Closed: ${issue.closed_at ?? 'none'}`,
+    `Type: ${issue.pull_request ? 'pull request' : 'issue'}`
     '',
     issue.body ?? '',
   ].join('\n');
