@@ -24,6 +24,7 @@
         "audit-org-repos",
         "compare-org-repositories",
         "codespaces-usage",
+        "get-issue-by-id",
         "get-issues-by-user",
         "get-package-details",
         "get-repo-release-sizes",
