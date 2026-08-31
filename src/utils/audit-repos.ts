@@ -16,6 +16,7 @@ export interface AuditSourceRepo {
   migrationStatus: string;
   migrationIssue: string;
   isLocked: boolean | undefined;
+  hasOpenSecretScanAlerts: boolean | undefined;
 }
 
 export interface AuditTargetRepo {
@@ -37,6 +38,17 @@ export interface ParsedAuditExport<T> {
   organization: string;
   repositories: T[];
   duplicateGroups: AuditDuplicateGroup<T>[];
+}
+
+export const SECRET_SCAN_COLUMN = 'has_open_secret_scan_alerts';
+
+export interface ParsedAuditSourceExport extends ParsedAuditExport<AuditSourceRepo> {
+  /**
+   * Whether the source export contained the optional
+   * `has_open_secret_scan_alerts` column; exports produced before the column
+   * was added are still supported, with unknown values.
+   */
+  hasSecretScanColumn: boolean;
 }
 
 export type AuditDuplicateReportGroup =
@@ -66,6 +78,7 @@ export interface AuditRecord {
   migrationStatus: string;
   migrationIssue: string;
   isLockedInSource: boolean | undefined;
+  hasOpenSecretScanAlerts: boolean | undefined;
   matches: TargetMatch[];
   notes: string[];
 }
@@ -74,6 +87,7 @@ export const AUDIT_NOTES = {
   MATCHED_BOTH: 'matched-in-both-orgs',
   ISSUE_MISMATCH: 'migration-issue-mismatch',
   SUCCESS_NO_MATCH: 'status-success-but-no-match-found',
+  OPEN_SECRET_SCANNING_ALERTS: 'open-secret-scanning-alerts',
   DUPLICATE_SOURCE: 'duplicate-source-repository-row',
   DUPLICATE_SOFTWARE_TARGET: 'duplicate-software-target-repository-row',
   DUPLICATE_ARCHIVE_TARGET: 'duplicate-archive-target-repository-row',
@@ -169,7 +183,7 @@ function canonicalizeByRepositoryName<T extends { repositoryName: string }>(
 export function parseAuditSourceExport(
   contents: string,
   fileLabel: string,
-): ParsedAuditExport<AuditSourceRepo> {
+): ParsedAuditSourceExport {
   const records = parseCsvRecords(contents);
   requireHeaders(
     records,
@@ -194,6 +208,7 @@ export function parseAuditSourceExport(
     migrationStatus: record.migration_status?.trim() ?? '',
     migrationIssue: record.migration_issue?.trim() ?? '',
     isLocked: parseTriStateBoolean(record.is_locked),
+    hasOpenSecretScanAlerts: parseTriStateBoolean(record[SECRET_SCAN_COLUMN]),
   }));
   const { repositories, duplicateGroups } =
     canonicalizeByRepositoryName(parsedRepositories);
@@ -202,6 +217,10 @@ export function parseAuditSourceExport(
     organization,
     repositories,
     duplicateGroups,
+    hasSecretScanColumn: Object.prototype.hasOwnProperty.call(
+      records[0],
+      SECRET_SCAN_COLUMN,
+    ),
   };
 }
 
@@ -367,6 +386,11 @@ export interface BuildAuditRecordsOptions {
   targetDuplicateGroups?: Partial<
     Record<TargetRole, AuditDuplicateGroup<AuditTargetRepo>[]>
   >;
+  /**
+   * When false, open secret scanning alert data from the source export is
+   * ignored entirely (no value on the record, no note).
+   */
+  includeSecretScanning?: boolean;
 }
 
 /**
@@ -378,6 +402,7 @@ export function buildAuditRecords(
   targetsByRole: Partial<Record<TargetRole, AuditTargetRepo[]>>,
   options: BuildAuditRecordsOptions = {},
 ): AuditRecord[] {
+  const includeSecretScanning = options.includeSecretScanning !== false;
   const sourceDuplicateNames = new Set(
     options.sourceDuplicateGroups?.map((group) => group.normalizedName) ?? [],
   );
@@ -471,6 +496,10 @@ export function buildAuditRecords(
       notes.push(AUDIT_NOTES.SUCCESS_NO_MATCH);
     }
 
+    if (repo.hasOpenSecretScanAlerts === true && includeSecretScanning) {
+      notes.push(AUDIT_NOTES.OPEN_SECRET_SCANNING_ALERTS);
+    }
+
     return {
       repoName: repo.repositoryName,
       sourceOrg: repo.organization,
@@ -478,6 +507,9 @@ export function buildAuditRecords(
       migrationStatus: repo.migrationStatus,
       migrationIssue: repo.migrationIssue,
       isLockedInSource: repo.isLocked,
+      hasOpenSecretScanAlerts: includeSecretScanning
+        ? repo.hasOpenSecretScanAlerts
+        : undefined,
       matches,
       notes,
     };
@@ -515,13 +547,25 @@ export const AUDIT_CSV_HEADERS = [
   'archived_in_target',
   'created_at_in_target',
   'locked_in_source',
+  SECRET_SCAN_COLUMN,
   'notes',
 ];
+
+/**
+ * CSV headers used when the secret scanning check is disabled.
+ */
+export const AUDIT_CSV_HEADERS_WITHOUT_SECRET_SCANNING =
+  AUDIT_CSV_HEADERS.filter((header) => header !== SECRET_SCAN_COLUMN);
+
+export function auditCsvHeaders(includeSecretScanning = true): string[] {
+  return includeSecretScanning
+    ? AUDIT_CSV_HEADERS
+    : AUDIT_CSV_HEADERS_WITHOUT_SECRET_SCANNING;
+}
 
 function lockedDisplayValue(value: boolean | undefined): string {
   return value === undefined ? '' : String(value);
 }
-
 /**
  * Renders an audit record into a flat CSV row, sanitizing every string
  * value against spreadsheet formula injection.
@@ -551,6 +595,7 @@ export function toAuditCsvRecord(record: AuditRecord): Record<string, string> {
       (match) => match.createdAt,
     ),
     locked_in_source: lockedDisplayValue(record.isLockedInSource),
+    [SECRET_SCAN_COLUMN]: lockedDisplayValue(record.hasOpenSecretScanAlerts),
     notes: record.notes.join(';'),
   };
 
@@ -587,13 +632,15 @@ export function deriveMarkdownPath(csvPath: string): string {
  * Renders audit records into full CSV file content (header + rows), with
  * every field passed through the shared CSV escaping/sanitization helpers.
  */
-export function renderAuditCsv(records: AuditRecord[]): string {
+export function renderAuditCsv(
+  records: AuditRecord[],
+  options: { includeSecretScanning?: boolean } = {},
+): string {
+  const headers = auditCsvHeaders(options.includeSecretScanning !== false);
   const rows = records.map((record) => toAuditCsvRecord(record));
-  const lines = [AUDIT_CSV_HEADERS.map(escapeCsvValue).join(',')];
+  const lines = [headers.map(escapeCsvValue).join(',')];
   for (const row of rows) {
-    lines.push(
-      AUDIT_CSV_HEADERS.map((header) => escapeCsvValue(row[header])).join(','),
-    );
+    lines.push(headers.map((header) => escapeCsvValue(row[header])).join(','));
   }
   return lines.join('\n') + '\n';
 }
@@ -605,6 +652,8 @@ export interface AuditSummary {
   anomalyCount: number;
   duplicateGroupCount: number;
   duplicateExtraRowCount: number;
+  openSecretScanAlertCount: number;
+  unknownSecretScanCount: number;
 }
 
 export function summarizeAuditRecords(
@@ -614,6 +663,8 @@ export function summarizeAuditRecords(
   const byStatus: Record<string, number> = {};
   const byTargetLabel: Record<string, number> = {};
   let anomalyCount = 0;
+  let openSecretScanAlertCount = 0;
+  let unknownSecretScanCount = 0;
 
   for (const record of records) {
     const statusKey =
@@ -626,6 +677,12 @@ export function summarizeAuditRecords(
     if (record.notes.length > 0) {
       anomalyCount++;
     }
+
+    if (record.hasOpenSecretScanAlerts === true) {
+      openSecretScanAlertCount++;
+    } else if (record.hasOpenSecretScanAlerts === undefined) {
+      unknownSecretScanCount++;
+    }
   }
 
   return {
@@ -633,6 +690,8 @@ export function summarizeAuditRecords(
     byStatus,
     byTargetLabel,
     anomalyCount,
+    openSecretScanAlertCount,
+    unknownSecretScanCount,
     duplicateGroupCount: duplicateGroups.length,
     duplicateExtraRowCount: duplicateGroups.reduce(
       (count, group) => count + group.occurrences.length - 1,
@@ -737,11 +796,17 @@ export interface RenderMarkdownOptions {
   title?: string;
   migrationIssueUrlPrefix?: string;
   duplicateGroups?: AuditDuplicateReportGroup[];
+  includeSecretScanning?: boolean;
+}
+
+function renderSecretScanValue(value: boolean | undefined): string {
+  return value === undefined ? 'unknown' : String(value);
 }
 
 function renderDuplicateGroups(
   lines: string[],
   duplicateGroups: AuditDuplicateReportGroup[],
+  includeSecretScanning: boolean,
 ): void {
   lines.push('## Duplicate repository rows', '');
   if (duplicateGroups.length === 0) {
@@ -762,13 +827,18 @@ function renderDuplicateGroups(
     lines.push(`Input: \`${escapeMarkdown(group.fileLabel)}\``, '');
 
     if (group.inputRole === 'source') {
+      const secretHeader = includeSecretScanning ? ' Open Secret Alerts |' : '';
+      const secretDivider = includeSecretScanning ? ' --- |' : '';
       lines.push(
-        '| Row | Organization | Repository | Migration Status | Migration Issue | Locked |',
+        `| Row | Organization | Repository | Migration Status | Migration Issue | Locked |${secretHeader}`,
       );
-      lines.push('| --- | --- | --- | --- | --- | --- |');
+      lines.push(`| --- | --- | --- | --- | --- | --- |${secretDivider}`);
       group.occurrences.forEach((occurrence, index) => {
+        const secretCell = includeSecretScanning
+          ? ` ${renderSecretScanValue(occurrence.hasOpenSecretScanAlerts)} |`
+          : '';
         lines.push(
-          `| ${index + 1} | ${escapeMarkdown(occurrence.organization)} | ${markdownLink(occurrence.repositoryName, occurrence.url)} | ${escapeMarkdown(occurrence.migrationStatus)} | ${escapeMarkdown(occurrence.migrationIssue)} | ${renderLockedValue(occurrence.isLocked)} |`,
+          `| ${index + 1} | ${escapeMarkdown(occurrence.organization)} | ${markdownLink(occurrence.repositoryName, occurrence.url)} | ${escapeMarkdown(occurrence.migrationStatus)} | ${escapeMarkdown(occurrence.migrationIssue)} | ${renderLockedValue(occurrence.isLocked)} |${secretCell}`,
         );
       });
     } else {
@@ -799,6 +869,7 @@ export function renderAuditMarkdown(
 ): string {
   const lines: string[] = [];
   const title = options.title ?? 'Repository Migration Audit';
+  const includeSecretScanning = options.includeSecretScanning !== false;
 
   lines.push(`# ${title}`, '');
   lines.push('## Summary', '');
@@ -837,6 +908,18 @@ export function renderAuditMarkdown(
     `Additional duplicate rows: **${summary.duplicateExtraRowCount}**`,
     '',
   );
+  if (includeSecretScanning) {
+    lines.push(
+      `Repositories with open secret scanning alerts: **${summary.openSecretScanAlertCount}**`,
+      '',
+    );
+    if (summary.unknownSecretScanCount > 0) {
+      lines.push(
+        `Repositories with unknown secret scanning alert state: **${summary.unknownSecretScanCount}**`,
+        '',
+      );
+    }
+  }
 
   lines.push('## Repositories by status and target', '');
 
@@ -873,9 +956,11 @@ export function renderAuditMarkdown(
       );
       lines.push('');
       lines.push(
-        '| Source Repository | Target Repository | Migration Issue | Migration Status | Visibility (Target) | Archived (Target) | Created At (Target) | Locked (Source) | Notes |',
+        `| Source Repository | Target Repository | Migration Issue | Migration Status | Visibility (Target) | Archived (Target) | Created At (Target) | Locked (Source) |${includeSecretScanning ? ' Open Secret Alerts (Source) |' : ''} Notes |`,
       );
-      lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+      lines.push(
+        `| --- | --- | --- | --- | --- | --- | --- | --- |${includeSecretScanning ? ' --- |' : ''} --- |`,
+      );
       for (const record of groupRecords) {
         const cells = [
           markdownLink(record.repoName, record.sourceUrl),
@@ -889,6 +974,9 @@ export function renderAuditMarkdown(
           renderArchivedValues(record.matches),
           renderCreatedAtValues(record.matches),
           renderLockedValue(record.isLockedInSource),
+          ...(includeSecretScanning
+            ? [renderSecretScanValue(record.hasOpenSecretScanAlerts)]
+            : []),
           record.notes.map(escapeMarkdown).join('; '),
         ];
         lines.push(`| ${cells.join(' | ')} |`);
@@ -898,7 +986,11 @@ export function renderAuditMarkdown(
     }
   }
 
-  renderDuplicateGroups(lines, options.duplicateGroups ?? []);
+  renderDuplicateGroups(
+    lines,
+    options.duplicateGroups ?? [],
+    includeSecretScanning,
+  );
 
   return lines.join('\n');
 }

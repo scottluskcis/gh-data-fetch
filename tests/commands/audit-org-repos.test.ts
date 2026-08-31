@@ -283,4 +283,113 @@ describe('audit-org-repos command', () => {
       ]),
     ).rejects.toThrow('already exists');
   });
+
+  it('reports open secret scanning alerts in the CSV and Markdown outputs', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      [
+        `${SOURCE_HEADERS},has_open_secret_scan_alerts`,
+        'acme,one,https://github.com/acme/one,not-started,,false,true',
+        'acme,two,https://github.com/acme/two,not-started,,false,false',
+      ].join('\n') + '\n',
+    );
+    const softwareFile = writeFile(
+      directory,
+      'software.csv',
+      `${TARGET_HEADERS}\nacme-software,two,https://github.com/acme-software/two,private,false,2024-01-01T00:00:00Z,123\n`,
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `software=${softwareFile}`,
+      '--output-file',
+      outputFile,
+      '--check-secret-scanning',
+      'true',
+    ]);
+
+    const csvLines = fs.readFileSync(outputFile, 'utf8').trim().split('\n');
+    expect(csvLines[0]).toContain('has_open_secret_scan_alerts');
+    expect(csvLines[1]).toContain('open-secret-scanning-alerts');
+    expect(csvLines[2]).not.toContain('open-secret-scanning-alerts');
+
+    const markdown = fs.readFileSync(path.join(directory, 'audit.md'), 'utf8');
+    expect(markdown).toContain('Open Secret Alerts (Source)');
+    expect(markdown).toContain(
+      'Repositories with open secret scanning alerts: **1**',
+    );
+  });
+
+  it('warns when the source export predates the secret scanning column', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      `${SOURCE_HEADERS}\nacme,one,https://github.com/acme/one,success,123,true\n`,
+    );
+    const softwareFile = writeFile(
+      directory,
+      'software.csv',
+      `${TARGET_HEADERS}\nacme-software,one,https://github.com/acme-software/one,private,false,2024-01-01T00:00:00Z,123\n`,
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `software=${softwareFile}`,
+      '--output-file',
+      outputFile,
+      '--check-secret-scanning',
+      'true',
+    ]);
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('does not contain a has_open_secret_scan_alerts'),
+    );
+    const markdown = fs.readFileSync(path.join(directory, 'audit.md'), 'utf8');
+    expect(markdown).toContain(
+      'Repositories with unknown secret scanning alert state: **1**',
+    );
+  });
+
+  it('omits secret scanning data when --check-secret-scanning is false', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      `${SOURCE_HEADERS},has_open_secret_scan_alerts\nacme,one,https://github.com/acme/one,not-started,,false,true\n`,
+    );
+    const softwareFile = writeFile(
+      directory,
+      'software.csv',
+      `${TARGET_HEADERS}\nacme-software,two,https://github.com/acme-software/two,private,false,2024-01-01T00:00:00Z,123\n`,
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `software=${softwareFile}`,
+      '--output-file',
+      outputFile,
+      '--check-secret-scanning',
+      'false',
+    ]);
+
+    const csv = fs.readFileSync(outputFile, 'utf8');
+    expect(csv).not.toContain('has_open_secret_scan_alerts');
+    expect(csv).not.toContain('open-secret-scanning-alerts');
+    const markdown = fs.readFileSync(path.join(directory, 'audit.md'), 'utf8');
+    expect(markdown).not.toContain('Open Secret Alerts');
+    expect(markdown).not.toContain('open secret scanning alerts');
+  });
 });
