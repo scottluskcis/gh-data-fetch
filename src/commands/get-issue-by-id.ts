@@ -93,7 +93,7 @@ export function formatIssueHuman(issue: IssueDetails): string {
     `Created: ${issue.created_at}`,
     `Updated: ${issue.updated_at}`,
     `Closed: ${issue.closed_at ?? 'none'}`,
-    `Type: ${issue.pull_request ? 'pull request' : 'issue'}`
+    `Type: ${issue.pull_request ? 'pull request' : 'issue'}`,
     '',
     issue.body ?? '',
   ].join('\n');
