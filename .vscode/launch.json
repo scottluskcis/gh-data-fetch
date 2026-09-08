@@ -37,6 +37,7 @@
         "list-team-members",
         "list-webhooks",
         "migration-export-status",
+        "parse-repos-from-csv",
         "set-org-repo-custom-property",
         "unlock-org-repository"
       ],
