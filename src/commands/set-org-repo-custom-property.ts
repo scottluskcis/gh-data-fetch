@@ -104,46 +104,69 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
         const repositoriesPerPage = 100;
         let page = 1;
 
-        while (true) {
-          const response = await executeApiOperation(
-            () =>
-              octokit.rest.repos.listForOrg({
-                org: organization,
-                page,
-                per_page: repositoriesPerPage,
-                type: 'all',
-              }),
-            retryConfig,
-            retryDisabled,
-            logger,
-            `Fetching repository page ${page}`,
-          );
-          organizationRepositories.push(
-            ...response.data.map((repository) => repository.name),
-          );
-
-          if (response.data.length < repositoriesPerPage) {
-            break;
-          }
-          page++;
-        }
-
         const requestedRepositories = options.repoList
           ? parseRepositoryList(
               fs.readFileSync(options.repoList, 'utf8'),
               organization,
             )
           : undefined;
-        const repositoryNames = selectRepositoryNames(
-          organizationRepositories,
-          requestedRepositories,
-        );
+
+        // Skip listing every org repo when a specific repo list was requested.
+        if (!requestedRepositories) {
+          while (true) {
+            const response = await executeApiOperation(
+              () =>
+                octokit.rest.repos.listForOrg({
+                  org: organization,
+                  page,
+                  per_page: repositoriesPerPage,
+                  type: 'all',
+                }),
+              retryConfig,
+              retryDisabled,
+              logger,
+              `Fetching repository page ${page}`,
+            );
+            organizationRepositories.push(
+              ...response.data.map((repository) => repository.name),
+            );
+
+            if (response.data.length < repositoriesPerPage) {
+              break;
+            }
+            page++;
+          }
+        }
+
+        const repositoryNames = requestedRepositories
+          ? requestedRepositories
+          : selectRepositoryNames(organizationRepositories);
 
         if (repositoryNames.length === 0) {
           logger.info(
             `No repositories found in ${organization}; nothing to update`,
           );
           return;
+        }
+
+        if (requestedRepositories) {
+          const missingRepositories: string[] = [];
+          for (const name of requestedRepositories) {
+            try {
+              await octokit.rest.repos.get({ owner: organization, repo: name });
+            } catch (error: unknown) {
+              if (errorStatus(error) === 404) {
+                missingRepositories.push(name);
+                continue;
+              }
+              throw error;
+            }
+          }
+          if (missingRepositories.length > 0) {
+            throw new Error(
+              `Repositories not found in ${organization}: ${missingRepositories.join(', ')}`,
+            );
+          }
         }
 
         logger.info(

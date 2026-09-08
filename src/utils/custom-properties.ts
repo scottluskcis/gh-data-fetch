@@ -6,19 +6,21 @@ export function resolveCustomPropertyValue(
 ): string | null {
   const shouldClear =
     clearPropertyValue === true || clearPropertyValue === 'true';
+  const hasPropertyValue =
+    typeof propertyValue === 'string' && propertyValue !== '';
 
   if (shouldClear) {
-    if (typeof propertyValue === 'string') {
+    if (hasPropertyValue) {
       throw new Error('Specify exactly one of --property-value or --clear');
     }
     return null;
   }
 
-  if (typeof propertyValue !== 'string') {
+  if (!hasPropertyValue) {
     throw new Error('Specify exactly one of --property-value or --clear');
   }
 
-  return propertyValue;
+  return propertyValue as string;
 }
 
 export function parseRepositoryList(
