@@ -1,5 +1,64 @@
 export const CUSTOM_PROPERTY_BATCH_SIZE = 30;
 
+export interface CustomPropertyValue {
+  property_name: string;
+  value: string | string[] | null;
+}
+
+/**
+ * Combines repeated CLI values and comma-separated entries into a
+ * de-duplicated, ordered list of custom property names.
+ */
+export function resolvePropertyNames(
+  repeatedPropertyNames: string[],
+): string[] {
+  const names = repeatedPropertyNames
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    if (seen.has(name)) {
+      return false;
+    }
+    seen.add(name);
+    return true;
+  });
+}
+
+/**
+ * Filters a repository's custom property values down to the requested
+ * names, filling in `null` for names the repository does not have set. When
+ * no names are requested, every value on the repository is returned as-is.
+ */
+export function selectPropertyValues(
+  properties: CustomPropertyValue[],
+  requestedPropertyNames: string[],
+): CustomPropertyValue[] {
+  if (requestedPropertyNames.length === 0) {
+    return properties;
+  }
+
+  const valuesByName = new Map(
+    properties.map((property) => [property.property_name, property.value]),
+  );
+  return requestedPropertyNames.map((name) => ({
+    property_name: name,
+    value: valuesByName.get(name) ?? null,
+  }));
+}
+
+/**
+ * Renders a custom property value for CSV output, flattening the
+ * `multi_select` array shape into a JSON string.
+ */
+export function customPropertyDisplayValue(
+  value: string | string[] | null,
+): string | null {
+  return Array.isArray(value) ? JSON.stringify(value) : value;
+}
+
 export function resolveCustomPropertyValue(
   propertyValue: unknown,
   clearPropertyValue: unknown,

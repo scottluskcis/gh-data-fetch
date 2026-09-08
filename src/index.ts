@@ -15,6 +15,7 @@ import listRepoSecretScanAlertsCommand from './commands/list-repo-secret-scan-al
 import listReposWithPagesCommand from './commands/list-repos-with-pages.js';
 import compareOrgRepositoriesCommand from './commands/compare-org-repositories.js';
 import setOrgRepoCustomPropertyCommand from './commands/set-org-repo-custom-property.js';
+import getOrgRepoCustomPropertiesCommand from './commands/get-org-repo-custom-properties.js';
 import auditOrgReposCommand from './commands/audit-org-repos.js';
 import listEnterpriseOrgsCommand from './commands/list-enterprise-orgs.js';
 import listOrgReposCommand from './commands/list-org-repos.js';
@@ -40,6 +41,7 @@ const program = createProgram({
     listReposWithPagesCommand,
     compareOrgRepositoriesCommand,
     setOrgRepoCustomPropertyCommand,
+    getOrgRepoCustomPropertiesCommand,
   ],
 });
 

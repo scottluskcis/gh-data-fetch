@@ -3,8 +3,42 @@ import {
   chunkRepositoryNames,
   parseRepositoryList,
   resolveCustomPropertyValue,
+  resolvePropertyNames,
+  selectPropertyValues,
   selectRepositoryNames,
 } from '../../src/utils/custom-properties.js';
+
+describe('resolvePropertyNames', () => {
+  it('combines repeated and comma-separated values, trimming and de-duplicating', () => {
+    expect(
+      resolvePropertyNames([' team ', 'team,environment', 'environment']),
+    ).toEqual(['team', 'environment']);
+  });
+
+  it('returns an empty list when nothing is requested', () => {
+    expect(resolvePropertyNames([])).toEqual([]);
+  });
+});
+
+describe('selectPropertyValues', () => {
+  const properties = [
+    { property_name: 'team', value: 'platform' },
+    { property_name: 'environment', value: 'production' },
+  ];
+
+  it('returns every property when none are requested', () => {
+    expect(selectPropertyValues(properties, [])).toEqual(properties);
+  });
+
+  it('filters to the requested names, filling missing ones with null', () => {
+    expect(
+      selectPropertyValues(properties, ['environment', 'cost-center']),
+    ).toEqual([
+      { property_name: 'environment', value: 'production' },
+      { property_name: 'cost-center', value: null },
+    ]);
+  });
+});
 
 describe('resolveCustomPropertyValue', () => {
   it('returns a string value', () => {
