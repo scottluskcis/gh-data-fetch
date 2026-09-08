@@ -90,11 +90,11 @@ describe('resolveRequestedRepositoryNames', () => {
       .mockRejectedValueOnce(notFound);
 
     await expect(
-      resolveRequestedRepositoryNames(
-        { rest: { repos: { get } } },
-        'acme',
-        ['missing-one', 'exists', 'missing-two'],
-      ),
+      resolveRequestedRepositoryNames({ rest: { repos: { get } } }, 'acme', [
+        'missing-one',
+        'exists',
+        'missing-two',
+      ]),
     ).rejects.toThrow(
       'Repositories not found in acme: missing-one, missing-two',
     );
