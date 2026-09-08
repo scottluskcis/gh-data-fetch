@@ -15,6 +15,49 @@ import {
   retryConfigFromOptions,
 } from './command-helpers.js';
 
+interface RepositoryNameResolver {
+  rest: {
+    repos: {
+      get(options: { owner: string; repo: string }): Promise<{
+        data: { name: string };
+      }>;
+    };
+  };
+}
+
+export async function resolveRequestedRepositoryNames(
+  octokit: RepositoryNameResolver,
+  organization: string,
+  requestedRepositories: string[],
+): Promise<string[]> {
+  const repositoryNames: string[] = [];
+  const missingRepositories: string[] = [];
+
+  for (const name of requestedRepositories) {
+    try {
+      const response = await octokit.rest.repos.get({
+        owner: organization,
+        repo: name,
+      });
+      repositoryNames.push(response.data.name);
+    } catch (error: unknown) {
+      if (errorStatus(error) === 404) {
+        missingRepositories.push(name);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (missingRepositories.length > 0) {
+    throw new Error(
+      `Repositories not found in ${organization}: ${missingRepositories.join(', ')}`,
+    );
+  }
+
+  return repositoryNames;
+}
+
 const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
   'set-org-repo-custom-property',
 )
@@ -139,7 +182,11 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
         }
 
         const repositoryNames = requestedRepositories
-          ? requestedRepositories
+          ? await resolveRequestedRepositoryNames(
+              octokit,
+              organization,
+              requestedRepositories,
+            )
           : selectRepositoryNames(organizationRepositories);
 
         if (repositoryNames.length === 0) {
@@ -147,26 +194,6 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
             `No repositories found in ${organization}; nothing to update`,
           );
           return;
-        }
-
-        if (requestedRepositories) {
-          const missingRepositories: string[] = [];
-          for (const name of requestedRepositories) {
-            try {
-              await octokit.rest.repos.get({ owner: organization, repo: name });
-            } catch (error: unknown) {
-              if (errorStatus(error) === 404) {
-                missingRepositories.push(name);
-                continue;
-              }
-              throw error;
-            }
-          }
-          if (missingRepositories.length > 0) {
-            throw new Error(
-              `Repositories not found in ${organization}: ${missingRepositories.join(', ')}`,
-            );
-          }
         }
 
         logger.info(
