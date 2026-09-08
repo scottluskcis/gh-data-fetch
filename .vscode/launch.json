@@ -26,6 +26,7 @@
         "codespaces-usage",
         "get-issue-by-id",
         "get-issues-by-user",
+        "get-org-repo-custom-properties",
         "get-package-details",
         "get-repo-release-sizes",
         "list-enterprise-orgs",
@@ -36,6 +37,7 @@
         "list-team-members",
         "list-webhooks",
         "migration-export-status",
+        "parse-repos-from-csv",
         "set-org-repo-custom-property",
         "unlock-org-repository"
       ],

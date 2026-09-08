@@ -1,5 +1,6 @@
 import type { Logger, RetryConfig } from '@scottluskcis/octokit-harness';
 import { describe, expect, it, vi } from 'vitest';
+import { resolveRequestedRepositoryNames } from '../../src/commands/set-org-repo-custom-property.js';
 import { executeApiOperation } from '../../src/utils/api-operation.js';
 
 const retryConfig: RetryConfig = {
@@ -16,6 +17,22 @@ function createLogger(): Logger {
     warn: vi.fn(),
     error: vi.fn(),
   };
+}
+
+function resolveRepositories(
+  octokit: Parameters<typeof resolveRequestedRepositoryNames>[0],
+  organization: string,
+  repositories: string[],
+  logger = createLogger(),
+) {
+  return resolveRequestedRepositoryNames(
+    octokit,
+    organization,
+    repositories,
+    retryConfig,
+    false,
+    logger,
+  );
 }
 
 describe('executeApiOperation', () => {
@@ -56,5 +73,66 @@ describe('executeApiOperation', () => {
     ).rejects.toThrow('failure');
 
     expect(operation).toHaveBeenCalledOnce();
+  });
+});
+
+describe('resolveRequestedRepositoryNames', () => {
+  it('uses canonical repository names returned by GitHub', async () => {
+    const get = vi
+      .fn()
+      .mockResolvedValueOnce({ data: { name: 'lgcy-weams-vbaweams-3-0-12' } })
+      .mockResolvedValueOnce({ data: { name: 'Another-Repo' } });
+
+    await expect(
+      resolveRepositories(
+        { rest: { repos: { get } } },
+        'department-of-veterans-affairs',
+        ['lgcy-weams-VBAWEAMS-3-0-12', 'another-repo'],
+      ),
+    ).resolves.toEqual(['lgcy-weams-vbaweams-3-0-12', 'Another-Repo']);
+
+    expect(get).toHaveBeenCalledWith({
+      owner: 'department-of-veterans-affairs',
+      repo: 'lgcy-weams-VBAWEAMS-3-0-12',
+    });
+  });
+
+  it('reports all missing repositories', async () => {
+    const notFound = Object.assign(new Error('Not Found'), { status: 404 });
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(notFound)
+      .mockResolvedValueOnce({ data: { name: 'exists' } })
+      .mockRejectedValueOnce(notFound);
+
+    await expect(
+      resolveRepositories({ rest: { repos: { get } } }, 'acme', [
+        'missing-one',
+        'exists',
+        'missing-two',
+      ]),
+    ).rejects.toThrow(
+      'Repositories not found in acme: missing-one, missing-two',
+    );
+  });
+
+  it('retries transient repository lookup failures', async () => {
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({ data: { name: 'widgets' } });
+    const logger = createLogger();
+
+    await expect(
+      resolveRepositories(
+        { rest: { repos: { get } } },
+        'acme',
+        ['widgets'],
+        logger,
+      ),
+    ).resolves.toEqual(['widgets']);
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 });

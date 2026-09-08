@@ -1,4 +1,8 @@
-import { executeWithOctokit } from '@scottluskcis/octokit-harness';
+import {
+  executeWithOctokit,
+  type Logger,
+  type RetryConfig,
+} from '@scottluskcis/octokit-harness';
 import { Option } from 'commander';
 import fs from 'fs';
 import { executeApiOperation } from '../utils/api-operation.js';
@@ -14,6 +18,64 @@ import {
   parseBooleanOption,
   retryConfigFromOptions,
 } from './command-helpers.js';
+
+interface RepositoryNameResolver {
+  rest: {
+    repos: {
+      get(options: { owner: string; repo: string }): Promise<{
+        data: { name: string };
+      }>;
+    };
+  };
+}
+
+export async function resolveRequestedRepositoryNames(
+  octokit: RepositoryNameResolver,
+  organization: string,
+  requestedRepositories: string[],
+  retryConfig: RetryConfig,
+  retryDisabled: boolean,
+  logger: Logger,
+): Promise<string[]> {
+  const repositoryNames: string[] = [];
+  const missingRepositories: string[] = [];
+
+  for (const name of requestedRepositories) {
+    const response = await executeApiOperation(
+      async () => {
+        try {
+          return await octokit.rest.repos.get({
+            owner: organization,
+            repo: name,
+          });
+        } catch (error: unknown) {
+          if (errorStatus(error) === 404) {
+            return undefined;
+          }
+          throw error;
+        }
+      },
+      retryConfig,
+      retryDisabled,
+      logger,
+      `Resolving repository "${name}"`,
+    );
+
+    if (response) {
+      repositoryNames.push(response.data.name);
+    } else {
+      missingRepositories.push(name);
+    }
+  }
+
+  if (missingRepositories.length > 0) {
+    throw new Error(
+      `Repositories not found in ${organization}: ${missingRepositories.join(', ')}`,
+    );
+  }
+
+  return repositoryNames;
+}
 
 const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
   'set-org-repo-custom-property',
@@ -104,40 +166,50 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
         const repositoriesPerPage = 100;
         let page = 1;
 
-        while (true) {
-          const response = await executeApiOperation(
-            () =>
-              octokit.rest.repos.listForOrg({
-                org: organization,
-                page,
-                per_page: repositoriesPerPage,
-                type: 'all',
-              }),
-            retryConfig,
-            retryDisabled,
-            logger,
-            `Fetching repository page ${page}`,
-          );
-          organizationRepositories.push(
-            ...response.data.map((repository) => repository.name),
-          );
-
-          if (response.data.length < repositoriesPerPage) {
-            break;
-          }
-          page++;
-        }
-
         const requestedRepositories = options.repoList
           ? parseRepositoryList(
               fs.readFileSync(options.repoList, 'utf8'),
               organization,
             )
           : undefined;
-        const repositoryNames = selectRepositoryNames(
-          organizationRepositories,
-          requestedRepositories,
-        );
+
+        // Skip listing every org repo when a specific repo list was requested.
+        if (!requestedRepositories) {
+          while (true) {
+            const response = await executeApiOperation(
+              () =>
+                octokit.rest.repos.listForOrg({
+                  org: organization,
+                  page,
+                  per_page: repositoriesPerPage,
+                  type: 'all',
+                }),
+              retryConfig,
+              retryDisabled,
+              logger,
+              `Fetching repository page ${page}`,
+            );
+            organizationRepositories.push(
+              ...response.data.map((repository) => repository.name),
+            );
+
+            if (response.data.length < repositoriesPerPage) {
+              break;
+            }
+            page++;
+          }
+        }
+
+        const repositoryNames = requestedRepositories
+          ? await resolveRequestedRepositoryNames(
+              octokit,
+              organization,
+              requestedRepositories,
+              retryConfig,
+              retryDisabled,
+              logger,
+            )
+          : selectRepositoryNames(organizationRepositories);
 
         if (repositoryNames.length === 0) {
           logger.info(
