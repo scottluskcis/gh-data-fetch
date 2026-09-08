@@ -1,4 +1,8 @@
-import { executeWithOctokit } from '@scottluskcis/octokit-harness';
+import {
+  executeWithOctokit,
+  type Logger,
+  type RetryConfig,
+} from '@scottluskcis/octokit-harness';
 import { Option } from 'commander';
 import fs from 'fs';
 import { executeApiOperation } from '../utils/api-operation.js';
@@ -29,23 +33,38 @@ export async function resolveRequestedRepositoryNames(
   octokit: RepositoryNameResolver,
   organization: string,
   requestedRepositories: string[],
+  retryConfig: RetryConfig,
+  retryDisabled: boolean,
+  logger: Logger,
 ): Promise<string[]> {
   const repositoryNames: string[] = [];
   const missingRepositories: string[] = [];
 
   for (const name of requestedRepositories) {
-    try {
-      const response = await octokit.rest.repos.get({
-        owner: organization,
-        repo: name,
-      });
+    const response = await executeApiOperation(
+      async () => {
+        try {
+          return await octokit.rest.repos.get({
+            owner: organization,
+            repo: name,
+          });
+        } catch (error: unknown) {
+          if (errorStatus(error) === 404) {
+            return undefined;
+          }
+          throw error;
+        }
+      },
+      retryConfig,
+      retryDisabled,
+      logger,
+      `Resolving repository "${name}"`,
+    );
+
+    if (response) {
       repositoryNames.push(response.data.name);
-    } catch (error: unknown) {
-      if (errorStatus(error) === 404) {
-        missingRepositories.push(name);
-        continue;
-      }
-      throw error;
+    } else {
+      missingRepositories.push(name);
     }
   }
 
@@ -186,6 +205,9 @@ const setOrgRepoCustomPropertyCommand = createCommandWithSharedOptions(
               octokit,
               organization,
               requestedRepositories,
+              retryConfig,
+              retryDisabled,
+              logger,
             )
           : selectRepositoryNames(organizationRepositories);
 

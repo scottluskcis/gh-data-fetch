@@ -19,6 +19,22 @@ function createLogger(): Logger {
   };
 }
 
+function resolveRepositories(
+  octokit: Parameters<typeof resolveRequestedRepositoryNames>[0],
+  organization: string,
+  repositories: string[],
+  logger = createLogger(),
+) {
+  return resolveRequestedRepositoryNames(
+    octokit,
+    organization,
+    repositories,
+    retryConfig,
+    false,
+    logger,
+  );
+}
+
 describe('executeApiOperation', () => {
   it('retries only the supplied operation', async () => {
     const operation = vi
@@ -68,7 +84,7 @@ describe('resolveRequestedRepositoryNames', () => {
       .mockResolvedValueOnce({ data: { name: 'Another-Repo' } });
 
     await expect(
-      resolveRequestedRepositoryNames(
+      resolveRepositories(
         { rest: { repos: { get } } },
         'department-of-veterans-affairs',
         ['lgcy-weams-VBAWEAMS-3-0-12', 'another-repo'],
@@ -90,7 +106,7 @@ describe('resolveRequestedRepositoryNames', () => {
       .mockRejectedValueOnce(notFound);
 
     await expect(
-      resolveRequestedRepositoryNames({ rest: { repos: { get } } }, 'acme', [
+      resolveRepositories({ rest: { repos: { get } } }, 'acme', [
         'missing-one',
         'exists',
         'missing-two',
@@ -98,5 +114,25 @@ describe('resolveRequestedRepositoryNames', () => {
     ).rejects.toThrow(
       'Repositories not found in acme: missing-one, missing-two',
     );
+  });
+
+  it('retries transient repository lookup failures', async () => {
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({ data: { name: 'widgets' } });
+    const logger = createLogger();
+
+    await expect(
+      resolveRepositories(
+        { rest: { repos: { get } } },
+        'acme',
+        ['widgets'],
+        logger,
+      ),
+    ).resolves.toEqual(['widgets']);
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 });

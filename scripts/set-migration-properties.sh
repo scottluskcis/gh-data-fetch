@@ -27,7 +27,7 @@ if [[ "${CLEAR_MIGRATION_ISSUE}" != "true" && "${CLEAR_MIGRATION_ISSUE}" != "fal
   exit 1
 fi
 
-if [[ "${ORG_NAME}" == "<ORG_NAME>" || "${ACCESS_TOKEN}" == "<ACCESS_TOKEN>" || "${MIGRATION_STATUS}" == "<MIGRATION_STATUS>" ]]; then
+if [[ "${ORG_NAME}" == "<ORG_NAME>" || "${ACCESS_TOKEN}" == "<ACCESS_TOKEN>" || "${MIGRATION_STATUS_VALUE}" == "<MIGRATION_STATUS>" ]]; then
   echo "Set ORG_NAME, ACCESS_TOKEN, and MIGRATION_STATUS (env vars or edit this script) before running." >&2
   exit 1
 fi
