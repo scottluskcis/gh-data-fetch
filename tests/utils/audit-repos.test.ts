@@ -329,6 +329,43 @@ describe('buildAuditRecords', () => {
     expect(targetRoleLabel(records[0].matches)).toBe('software');
   });
 
+  it('falls back to migration_issue matching for renamed repositories', () => {
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'old-name', migrationIssue: '456' })],
+      {
+        software: [
+          targetRepo({ repositoryName: 'new-name', migrationIssue: '456' }),
+        ],
+      },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('software');
+    expect(records[0].matches[0].repositoryName).toBe('new-name');
+    expect(records[0].notes).toContain(AUDIT_NOTES.RENAMED_TARGET);
+  });
+
+  it('skips migration_issue fallback matching when target issues are duplicated', () => {
+    const warnings: string[] = [];
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'old-name', migrationIssue: '456' })],
+      {
+        software: [
+          targetRepo({ repositoryName: 'new-one', migrationIssue: '456' }),
+          targetRepo({ repositoryName: 'new-two', migrationIssue: '456' }),
+        ],
+      },
+      { onWarning: (message) => warnings.push(message) },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('none');
+    expect(records[0].notes).toContain(AUDIT_NOTES.SUCCESS_NO_MATCH);
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'duplicate software target migration_issue "456"; cannot use migration_issue fallback matching',
+      ),
+    ]);
+  });
+
   it('adds duplicate anomaly notes to the canonical audit record', () => {
     const sourceDuplicate = {
       normalizedName: 'one',

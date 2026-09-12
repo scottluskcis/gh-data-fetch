@@ -86,6 +86,7 @@ export interface AuditRecord {
 export const AUDIT_NOTES = {
   MATCHED_BOTH: 'matched-in-both-orgs',
   ISSUE_MISMATCH: 'migration-issue-mismatch',
+  RENAMED_TARGET: 'target-repository-renamed',
   SUCCESS_NO_MATCH: 'status-success-but-no-match-found',
   OPEN_SECRET_SCANNING_ALERTS: 'open-secret-scanning-alerts',
   DUPLICATE_SOURCE: 'duplicate-source-repository-row',
@@ -377,6 +378,41 @@ function buildTargetLookup(
   return map;
 }
 
+function normalizeMigrationIssue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function buildTargetIssueLookup(
+  role: TargetRole,
+  repos: AuditTargetRepo[],
+  fileLabel: string,
+  onWarning: (message: string) => void = (message) =>
+    console.warn(`Warning: ${message}`),
+): Map<string, AuditTargetRepo> {
+  const groups = new Map<string, AuditTargetRepo[]>();
+  for (const repo of repos) {
+    const issue = normalizeMigrationIssue(repo.migrationIssue);
+    if (!issue) {
+      continue;
+    }
+    const occurrences = groups.get(issue) ?? [];
+    occurrences.push(repo);
+    groups.set(issue, occurrences);
+  }
+
+  const lookup = new Map<string, AuditTargetRepo>();
+  for (const [issue, occurrences] of groups.entries()) {
+    if (occurrences.length > 1) {
+      onWarning(
+        `${fileLabel}: duplicate ${role} target migration_issue "${issue}"; cannot use migration_issue fallback matching for this issue`,
+      );
+      continue;
+    }
+    lookup.set(issue, occurrences[0]);
+  }
+  return lookup;
+}
+
 export interface BuildAuditRecordsOptions {
   archiveSuffix?: string;
   softwareFileLabel?: string;
@@ -428,6 +464,14 @@ export function buildAuditRecords(
         options.onWarning,
       )
     : undefined;
+  const softwareIssueLookup = targetsByRole.software
+    ? buildTargetIssueLookup(
+        'software',
+        targetsByRole.software,
+        options.softwareFileLabel ?? 'software target file',
+        options.onWarning,
+      )
+    : undefined;
   const archiveLookup = targetsByRole.archive
     ? buildTargetLookup(
         'archive',
@@ -437,16 +481,28 @@ export function buildAuditRecords(
         options.onWarning,
       )
     : undefined;
+  const archiveIssueLookup = targetsByRole.archive
+    ? buildTargetIssueLookup(
+        'archive',
+        targetsByRole.archive,
+        options.archiveFileLabel ?? 'archive target file',
+        options.onWarning,
+      )
+    : undefined;
 
   return source.map((repo) => {
     const key = normalizeName(repo.repositoryName);
+    const issueKey = normalizeMigrationIssue(repo.migrationIssue);
     const matches: TargetMatch[] = [];
     const notes: string[] = [];
     if (sourceDuplicateNames.has(key)) {
       notes.push(AUDIT_NOTES.DUPLICATE_SOURCE);
     }
 
-    const softwareMatch = softwareLookup?.get(key);
+    const softwareMatchByName = softwareLookup?.get(key);
+    const softwareMatch =
+      softwareMatchByName ??
+      (issueKey ? softwareIssueLookup?.get(issueKey) : undefined);
     if (softwareMatch) {
       matches.push({
         role: 'software',
@@ -457,6 +513,12 @@ export function buildAuditRecords(
         archived: softwareMatch.archived,
         createdAt: softwareMatch.createdAt,
       });
+      if (
+        !softwareMatchByName &&
+        normalizeName(softwareMatch.repositoryName) !== key
+      ) {
+        notes.push(AUDIT_NOTES.RENAMED_TARGET);
+      }
       if (
         softwareDuplicateNames.has(normalizeName(softwareMatch.repositoryName))
       ) {
@@ -469,7 +531,10 @@ export function buildAuditRecords(
       }
     }
 
-    const archiveMatch = archiveLookup?.get(key);
+    const archiveMatchByName = archiveLookup?.get(key);
+    const archiveMatch =
+      archiveMatchByName ??
+      (issueKey ? archiveIssueLookup?.get(issueKey) : undefined);
     if (archiveMatch) {
       matches.push({
         role: 'archive',
@@ -480,6 +545,14 @@ export function buildAuditRecords(
         archived: archiveMatch.archived,
         createdAt: archiveMatch.createdAt,
       });
+      if (!archiveMatchByName) {
+        const strippedArchiveName = options.archiveSuffix
+          ? stripArchiveSuffix(archiveMatch.repositoryName, options.archiveSuffix)
+          : null;
+        if (normalizeName(strippedArchiveName ?? archiveMatch.repositoryName) !== key) {
+          notes.push(AUDIT_NOTES.RENAMED_TARGET);
+        }
+      }
       if (archiveDuplicateNames.has(key)) {
         notes.push(AUDIT_NOTES.DUPLICATE_ARCHIVE_TARGET);
       }

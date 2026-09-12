@@ -76,6 +76,45 @@ describe('audit-org-repos command', () => {
     expect(fs.readFileSync(markdownFile, 'utf8')).toContain('## Summary');
   });
 
+  it('matches renamed repositories by migration_issue and reports the renamed target', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      [
+        SOURCE_HEADERS,
+        'acme,old-name,https://github.com/acme/old-name,success,456,true',
+      ].join('\n') + '\n',
+    );
+    const softwareFile = writeFile(
+      directory,
+      'software.csv',
+      [
+        TARGET_HEADERS,
+        'acme-software,new-name,https://github.com/acme-software/new-name,private,false,2024-01-01T00:00:00Z,456',
+      ].join('\n') + '\n',
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `software=${softwareFile}`,
+      '--output-file',
+      outputFile,
+    ]);
+
+    const csvLines = fs.readFileSync(outputFile, 'utf8').trim().split('\n');
+    expect(csvLines[1]).toContain('old-name,acme');
+    expect(csvLines[1]).toContain(',software,');
+    expect(csvLines[1]).toContain('https://github.com/acme-software/new-name');
+    expect(csvLines[1]).toContain('target-repository-renamed');
+
+    const markdown = fs.readFileSync(path.join(directory, 'audit.md'), 'utf8');
+    expect(markdown).toContain('[new-name](https://github.com/acme-software/new-name)');
+  });
+
   it('warns, reports, and continues when a target export has duplicate rows', async () => {
     const directory = tempDir();
     const sourceFile = writeFile(
