@@ -110,7 +110,8 @@ column produced by list-org-repos; exports without that column report
 
 When repository names do not match between source and target exports,
 audit-org-repos falls back to matching on migration_issue (when present and
-unique in the target export) so renamed repositories can still be identified.
+unique in both source and target exports) so renamed repositories can still
+be identified.
 `,
   )
   .action(async (options) => {
