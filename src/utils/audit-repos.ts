@@ -8,6 +8,7 @@ import {
 export type TargetRole = 'software' | 'archive';
 
 const TARGET_ROLES: TargetRole[] = ['software', 'archive'];
+const EMPTY_ISSUE_KEYS = new Set<string>();
 
 export interface AuditSourceRepo {
   organization: string;
@@ -86,6 +87,7 @@ export interface AuditRecord {
 export const AUDIT_NOTES = {
   MATCHED_BOTH: 'matched-in-both-orgs',
   ISSUE_MISMATCH: 'migration-issue-mismatch',
+  RENAMED_TARGET: 'target-repository-renamed',
   SUCCESS_NO_MATCH: 'status-success-but-no-match-found',
   OPEN_SECRET_SCANNING_ALERTS: 'open-secret-scanning-alerts',
   DUPLICATE_SOURCE: 'duplicate-source-repository-row',
@@ -95,6 +97,10 @@ export const AUDIT_NOTES = {
 
 function normalizeName(name: string): string {
   return name.trim().toLowerCase();
+}
+
+function defaultWarningHandler(message: string): void {
+  console.warn(`Warning: ${message}`);
 }
 
 function parseTriStateBoolean(value: string | undefined): boolean | undefined {
@@ -321,8 +327,7 @@ function buildTargetLookup(
   repos: AuditTargetRepo[],
   fileLabel: string,
   archiveSuffix?: string,
-  onWarning: (message: string) => void = (message) =>
-    console.warn(`Warning: ${message}`),
+  onWarning: (message: string) => void = defaultWarningHandler,
 ): Map<string, AuditTargetRepo> {
   const map = new Map<string, AuditTargetRepo>();
   const archiveSuffixMatches =
@@ -377,6 +382,80 @@ function buildTargetLookup(
   return map;
 }
 
+function normalizeMigrationIssue(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function archiveMatchKey(
+  repositoryName: string,
+  archiveSuffix?: string,
+): string {
+  return normalizeName(
+    archiveSuffix
+      ? stripArchiveSuffix(repositoryName, archiveSuffix) ?? repositoryName
+      : repositoryName,
+  );
+}
+
+interface TargetIssueLookup {
+  byIssue: Map<string, AuditTargetRepo>;
+  duplicateIssues: Set<string>;
+}
+
+function buildTargetIssueLookup(repos: AuditTargetRepo[]): TargetIssueLookup {
+  const groups = new Map<string, AuditTargetRepo[]>();
+  for (const repo of repos) {
+    const issue = normalizeMigrationIssue(repo.migrationIssue);
+    if (!issue) {
+      continue;
+    }
+    const occurrences = groups.get(issue) ?? [];
+    occurrences.push(repo);
+    groups.set(issue, occurrences);
+  }
+
+  const byIssue = new Map<string, AuditTargetRepo>();
+  const duplicateIssues = new Set<string>();
+  for (const [issue, occurrences] of groups.entries()) {
+    if (occurrences.length > 1) {
+      duplicateIssues.add(issue);
+      continue;
+    }
+    byIssue.set(issue, occurrences[0]);
+  }
+  return { byIssue, duplicateIssues };
+}
+
+function resolveIssueFallbackMatch(params: {
+  matchByName: AuditTargetRepo | undefined;
+  issueLookup: Map<string, AuditTargetRepo> | undefined;
+  duplicateIssueKeys: Set<string>;
+  issueKey: string;
+  canUseIssueFallback: boolean;
+  claimedTargetKeys: Set<string>;
+  targetKeyForMatch: (match: AuditTargetRepo) => string;
+  onDuplicateIssueFallback?: () => void;
+}): AuditTargetRepo | undefined {
+  if (params.matchByName) {
+    return params.matchByName;
+  }
+  if (!params.canUseIssueFallback || !params.issueLookup || !params.issueKey) {
+    return undefined;
+  }
+  if (params.duplicateIssueKeys.has(params.issueKey)) {
+    params.onDuplicateIssueFallback?.();
+    return undefined;
+  }
+  const matchByIssue = params.issueLookup.get(params.issueKey);
+  if (!matchByIssue) {
+    return undefined;
+  }
+  if (params.claimedTargetKeys.has(params.targetKeyForMatch(matchByIssue))) {
+    return undefined;
+  }
+  return matchByIssue;
+}
+
 export interface BuildAuditRecordsOptions {
   archiveSuffix?: string;
   softwareFileLabel?: string;
@@ -402,6 +481,21 @@ export function buildAuditRecords(
   targetsByRole: Partial<Record<TargetRole, AuditTargetRepo[]>>,
   options: BuildAuditRecordsOptions = {},
 ): AuditRecord[] {
+  const sourceIssueCounts = new Map<string, number>();
+  for (const repo of source) {
+    const issue = normalizeMigrationIssue(repo.migrationIssue);
+    if (!issue) {
+      continue;
+    }
+    sourceIssueCounts.set(issue, (sourceIssueCounts.get(issue) ?? 0) + 1);
+  }
+  const duplicateSourceIssueKeys = new Set(
+    [...sourceIssueCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([issue]) => issue),
+  );
+  const warningHandler = options.onWarning ?? defaultWarningHandler;
+  const warnedDuplicateSourceIssueKeys = new Set<string>();
   const includeSecretScanning = options.includeSecretScanning !== false;
   const sourceDuplicateNames = new Set(
     options.sourceDuplicateGroups?.map((group) => group.normalizedName) ?? [],
@@ -425,8 +519,11 @@ export function buildAuditRecords(
         targetsByRole.software,
         options.softwareFileLabel ?? 'software target file',
         undefined,
-        options.onWarning,
+        warningHandler,
       )
+    : undefined;
+  const softwareIssueLookup = targetsByRole.software
+    ? buildTargetIssueLookup(targetsByRole.software)
     : undefined;
   const archiveLookup = targetsByRole.archive
     ? buildTargetLookup(
@@ -434,19 +531,73 @@ export function buildAuditRecords(
         targetsByRole.archive,
         options.archiveFileLabel ?? 'archive target file',
         options.archiveSuffix,
-        options.onWarning,
+        warningHandler,
       )
     : undefined;
+  const archiveIssueLookup = targetsByRole.archive
+    ? buildTargetIssueLookup(targetsByRole.archive)
+    : undefined;
+  const warnedDuplicateTargetIssueFallbacks = new Set<string>();
+  const softwareFileLabel = options.softwareFileLabel ?? 'software target file';
+  const archiveFileLabel = options.archiveFileLabel ?? 'archive target file';
+  const nameMatchedSoftwareTargets = new Set(
+    source
+      .map((repo) => softwareLookup?.get(normalizeName(repo.repositoryName)))
+      .filter((match): match is AuditTargetRepo => match !== undefined)
+      .map((match) => normalizeName(match.repositoryName)),
+  );
+  const nameMatchedArchiveTargets = new Set(
+    source
+      .map((repo) => archiveLookup?.get(normalizeName(repo.repositoryName)))
+      .filter((match): match is AuditTargetRepo => match !== undefined)
+      .map((match) => archiveMatchKey(match.repositoryName, options.archiveSuffix)),
+  );
 
   return source.map((repo) => {
     const key = normalizeName(repo.repositoryName);
+    const issueKey = normalizeMigrationIssue(repo.migrationIssue);
+    const duplicateSourceIssue = issueKey
+      ? duplicateSourceIssueKeys.has(issueKey)
+      : false;
+    const softwareMatchByName = softwareLookup?.get(key);
+    const archiveMatchByName = archiveLookup?.get(key);
+    if (
+      duplicateSourceIssue &&
+      issueKey &&
+      !warnedDuplicateSourceIssueKeys.has(issueKey) &&
+      ((softwareIssueLookup && !softwareMatchByName) ||
+        (archiveIssueLookup && !archiveMatchByName))
+    ) {
+      warnedDuplicateSourceIssueKeys.add(issueKey);
+      warningHandler(
+        `source repositories contain duplicate migration_issue "${issueKey}"; cannot use migration_issue fallback matching for this issue`,
+      );
+    }
+    const canUseIssueFallback = issueKey !== '' && !duplicateSourceIssue;
     const matches: TargetMatch[] = [];
     const notes: string[] = [];
     if (sourceDuplicateNames.has(key)) {
       notes.push(AUDIT_NOTES.DUPLICATE_SOURCE);
     }
 
-    const softwareMatch = softwareLookup?.get(key);
+    const softwareMatch = resolveIssueFallbackMatch({
+      matchByName: softwareMatchByName,
+      issueLookup: softwareIssueLookup?.byIssue,
+      duplicateIssueKeys: softwareIssueLookup?.duplicateIssues ?? EMPTY_ISSUE_KEYS,
+      issueKey,
+      canUseIssueFallback,
+      claimedTargetKeys: nameMatchedSoftwareTargets,
+      targetKeyForMatch: (match) => normalizeName(match.repositoryName),
+      onDuplicateIssueFallback: () => {
+        const warningKey = `software:${issueKey}`;
+        if (!warnedDuplicateTargetIssueFallbacks.has(warningKey)) {
+          warnedDuplicateTargetIssueFallbacks.add(warningKey);
+          warningHandler(
+            `${softwareFileLabel}: duplicate software target migration_issue "${issueKey}"; cannot use migration_issue fallback matching for this issue`,
+          );
+        }
+      },
+    });
     if (softwareMatch) {
       matches.push({
         role: 'software',
@@ -457,6 +608,13 @@ export function buildAuditRecords(
         archived: softwareMatch.archived,
         createdAt: softwareMatch.createdAt,
       });
+      if (
+        !softwareMatchByName &&
+        normalizeName(softwareMatch.repositoryName) !== key &&
+        !notes.includes(AUDIT_NOTES.RENAMED_TARGET)
+      ) {
+        notes.push(AUDIT_NOTES.RENAMED_TARGET);
+      }
       if (
         softwareDuplicateNames.has(normalizeName(softwareMatch.repositoryName))
       ) {
@@ -469,8 +627,30 @@ export function buildAuditRecords(
       }
     }
 
-    const archiveMatch = archiveLookup?.get(key);
+    const archiveMatch = resolveIssueFallbackMatch({
+      matchByName: archiveMatchByName,
+      issueLookup: archiveIssueLookup?.byIssue,
+      duplicateIssueKeys: archiveIssueLookup?.duplicateIssues ?? EMPTY_ISSUE_KEYS,
+      issueKey,
+      canUseIssueFallback,
+      claimedTargetKeys: nameMatchedArchiveTargets,
+      targetKeyForMatch: (match) =>
+        archiveMatchKey(match.repositoryName, options.archiveSuffix),
+      onDuplicateIssueFallback: () => {
+        const warningKey = `archive:${issueKey}`;
+        if (!warnedDuplicateTargetIssueFallbacks.has(warningKey)) {
+          warnedDuplicateTargetIssueFallbacks.add(warningKey);
+          warningHandler(
+            `${archiveFileLabel}: duplicate archive target migration_issue "${issueKey}"; cannot use migration_issue fallback matching for this issue`,
+          );
+        }
+      },
+    });
     if (archiveMatch) {
+      const archiveMatchedKey = archiveMatchKey(
+        archiveMatch.repositoryName,
+        options.archiveSuffix,
+      );
       matches.push({
         role: 'archive',
         organization: archiveMatch.organization,
@@ -480,7 +660,14 @@ export function buildAuditRecords(
         archived: archiveMatch.archived,
         createdAt: archiveMatch.createdAt,
       });
-      if (archiveDuplicateNames.has(key)) {
+      if (
+        !archiveMatchByName &&
+        archiveMatchedKey !== key &&
+        !notes.includes(AUDIT_NOTES.RENAMED_TARGET)
+      ) {
+        notes.push(AUDIT_NOTES.RENAMED_TARGET);
+      }
+      if (archiveDuplicateNames.has(archiveMatchedKey)) {
         notes.push(AUDIT_NOTES.DUPLICATE_ARCHIVE_TARGET);
       }
     }

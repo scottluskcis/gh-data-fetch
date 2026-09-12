@@ -329,6 +329,105 @@ describe('buildAuditRecords', () => {
     expect(targetRoleLabel(records[0].matches)).toBe('software');
   });
 
+  it('falls back to migration_issue matching for renamed repositories', () => {
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'old-name', migrationIssue: '456' })],
+      {
+        software: [
+          targetRepo({ repositoryName: 'new-name', migrationIssue: '456' }),
+        ],
+      },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('software');
+    expect(records[0].matches[0].repositoryName).toBe('new-name');
+    expect(records[0].notes).toContain(AUDIT_NOTES.RENAMED_TARGET);
+  });
+
+  it('falls back to migration_issue matching for renamed archive repositories', () => {
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'old-archive', migrationIssue: '789' })],
+      {
+        archive: [
+          targetRepo({
+            organization: 'acme-archive',
+            repositoryName: 'new-archive-dova',
+            migrationIssue: '789',
+          }),
+        ],
+      },
+      { archiveSuffix: '-dova' },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('archive');
+    expect(records[0].matches[0].repositoryName).toBe('new-archive-dova');
+    expect(records[0].notes).toContain(AUDIT_NOTES.RENAMED_TARGET);
+  });
+
+  it('skips migration_issue fallback matching when target issues are duplicated', () => {
+    const warnings: string[] = [];
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'old-name', migrationIssue: '456' })],
+      {
+        software: [
+          targetRepo({ repositoryName: 'new-one', migrationIssue: '456' }),
+          targetRepo({ repositoryName: 'new-two', migrationIssue: '456' }),
+        ],
+      },
+      { onWarning: (message) => warnings.push(message) },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('none');
+    expect(records[0].notes).toContain(AUDIT_NOTES.SUCCESS_NO_MATCH);
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'duplicate software target migration_issue "456"; cannot use migration_issue fallback matching',
+      ),
+    ]);
+  });
+
+  it('skips migration_issue fallback matching when source issues are duplicated', () => {
+    const warnings: string[] = [];
+    const records = buildAuditRecords(
+      [
+        sourceRepo({ repositoryName: 'old-one', migrationIssue: '456' }),
+        sourceRepo({ repositoryName: 'old-two', migrationIssue: '456' }),
+      ],
+      {
+        software: [
+          targetRepo({ repositoryName: 'new-name', migrationIssue: '456' }),
+        ],
+      },
+      { onWarning: (message) => warnings.push(message) },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('none');
+    expect(targetRoleLabel(records[1].matches)).toBe('none');
+    expect(records[0].notes).toContain(AUDIT_NOTES.SUCCESS_NO_MATCH);
+    expect(records[1].notes).toContain(AUDIT_NOTES.SUCCESS_NO_MATCH);
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'source repositories contain duplicate migration_issue "456"; cannot use migration_issue fallback matching',
+      ),
+    ]);
+  });
+
+  it('does not let migration_issue fallback claim a target already matched by name', () => {
+    const records = buildAuditRecords(
+      [
+        sourceRepo({ repositoryName: 'one', migrationIssue: '999' }),
+        sourceRepo({ repositoryName: 'old-two', migrationIssue: '456' }),
+      ],
+      {
+        software: [targetRepo({ repositoryName: 'one', migrationIssue: '456' })],
+      },
+    );
+
+    expect(targetRoleLabel(records[0].matches)).toBe('software');
+    expect(targetRoleLabel(records[1].matches)).toBe('none');
+    expect(records[1].notes).toContain(AUDIT_NOTES.SUCCESS_NO_MATCH);
+  });
+
   it('adds duplicate anomaly notes to the canonical audit record', () => {
     const sourceDuplicate = {
       normalizedName: 'one',

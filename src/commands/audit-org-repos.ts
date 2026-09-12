@@ -107,6 +107,11 @@ required whenever an archive target is supplied.
 Open secret scanning alert data comes from the has_open_secret_scan_alerts
 column produced by list-org-repos; exports without that column report
 "unknown". Pass --check-secret-scanning false to omit the data entirely.
+
+When repository names do not match between source and target exports,
+audit-org-repos falls back to matching on migration_issue (when present and
+unique in both source and target exports) so renamed repositories can still
+be identified.
 `,
   )
   .action(async (options) => {
