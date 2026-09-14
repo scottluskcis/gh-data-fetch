@@ -466,6 +466,19 @@ interface RenamedTargetMatch {
   names: string[];
 }
 
+type RenameIndex = Map<string, AuditRepoRename[]>;
+
+function buildRenameIndex(repoRenames: AuditRepoRename[]): RenameIndex {
+  const renamesByOriginal: RenameIndex = new Map();
+  for (const rename of repoRenames) {
+    const originalKey = normalizeName(rename.originalRepositoryName);
+    const entries = renamesByOriginal.get(originalKey) ?? [];
+    entries.push(rename);
+    renamesByOriginal.set(originalKey, entries);
+  }
+  return renamesByOriginal;
+}
+
 function splitRepositoryFullName(
   fullName: string,
 ): { organization: string; repositoryName: string } | undefined {
@@ -483,7 +496,7 @@ function findRenamedTarget(
   sourceRepositoryName: string,
   targetOrganization: string | undefined,
   targetLookup: Map<string, AuditTargetRepo> | undefined,
-  repoRenames: AuditRepoRename[],
+  renamesByOriginal: RenameIndex,
   archiveSuffix?: string,
 ): RenamedTargetMatch | undefined {
   if (!targetOrganization || !targetLookup) {
@@ -492,14 +505,6 @@ function findRenamedTarget(
 
   const organizationKey = normalizeName(targetOrganization);
   const candidates: RenamedTargetMatch[] = [];
-  const renamesByOriginal = new Map<string, AuditRepoRename[]>();
-  for (const rename of repoRenames) {
-    const originalKey = normalizeName(rename.originalRepositoryName);
-    const entries = renamesByOriginal.get(originalKey) ?? [];
-    entries.push(rename);
-    renamesByOriginal.set(originalKey, entries);
-  }
-
   const startFullName = `${targetOrganization}/${sourceRepositoryName}`;
   const pending = (
     renamesByOriginal.get(normalizeName(startFullName)) ?? []
@@ -600,6 +605,7 @@ export function buildAuditRecords(
       )
     : undefined;
   const repoRenames = options.repoRenames ?? [];
+  const renameIndex = buildRenameIndex(repoRenames);
   const softwareOrganization = targetsByRole.software?.[0]?.organization;
   const archiveOrganization = targetsByRole.archive?.[0]?.organization;
 
@@ -620,7 +626,7 @@ export function buildAuditRecords(
           repo.repositoryName,
           softwareOrganization,
           softwareLookup,
-          repoRenames,
+          renameIndex,
         );
     const softwareMatch = directSoftwareMatch ?? renamedSoftwareMatch?.target;
     if (softwareMatch) {
@@ -656,7 +662,7 @@ export function buildAuditRecords(
           repo.repositoryName,
           archiveOrganization,
           archiveLookup,
-          repoRenames,
+          renameIndex,
           options.archiveSuffix,
         );
     const archiveMatch = directArchiveMatch ?? renamedArchiveMatch?.target;

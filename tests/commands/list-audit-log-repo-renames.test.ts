@@ -7,6 +7,7 @@ import {
   nextAuditLogCursor,
   parseRepoRenameEntries,
   validateDateRange,
+  validatePageSize,
 } from '../../src/commands/list-audit-log-repo-renames.js';
 
 function logger(): Logger {
@@ -48,6 +49,17 @@ describe('audit log date range', () => {
         endDate: '2026-02-01',
       }),
     ).toThrow('on or before');
+  });
+});
+
+describe('audit log page size', () => {
+  it('normalizes the shared string default', () => {
+    expect(validatePageSize('10')).toBe(10);
+  });
+
+  it('rejects invalid page sizes', () => {
+    expect(() => validatePageSize('1.5')).toThrow('integer from 1 to 100');
+    expect(() => validatePageSize(101)).toThrow('integer from 1 to 100');
   });
 });
 

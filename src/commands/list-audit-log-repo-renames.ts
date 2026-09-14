@@ -106,6 +106,14 @@ export function validateDateRange(range: DateRange): DateRange {
   return { startDate, endDate };
 }
 
+export function validatePageSize(value: unknown): number {
+  const pageSize = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+    throw new Error('--page-size must be an integer from 1 to 100');
+  }
+  return pageSize;
+}
+
 export function buildAuditLogPhrase(range: DateRange): string {
   const terms = ['action:repo.rename'];
   if (range.startDate) {
@@ -334,13 +342,7 @@ fine-grained tokens need read access to organization Administration.
     if (!options.orgName) {
       throw new Error('An organization is required through --org-name');
     }
-    if (
-      !Number.isInteger(options.pageSize) ||
-      options.pageSize < 1 ||
-      options.pageSize > 100
-    ) {
-      throw new Error('--page-size must be an integer from 1 to 100');
-    }
+    const pageSize = validatePageSize(options.pageSize);
 
     const dateRange = validateDateRange({
       startDate: options.startDate,
@@ -361,7 +363,7 @@ fine-grained tokens need read access to organization Administration.
           octokit,
           organization: options.orgName,
           phrase,
-          perPage: options.pageSize,
+          perPage: pageSize,
           retryConfig,
           retryDisabled,
           logger,
