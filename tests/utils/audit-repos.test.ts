@@ -4,6 +4,7 @@ import {
   buildAuditRecords,
   collectTargetRepoList,
   deriveMarkdownPath,
+  parseAuditRepoRenameExport,
   parseAuditSourceExport,
   parseAuditTargetExport,
   renderAuditCsv,
@@ -138,6 +139,36 @@ describe('parseAuditTargetExport', () => {
     expect(result.repositories[0].migrationIssue).toBe('123');
   });
 
+  describe('parseAuditRepoRenameExport', () => {
+    it('parses list-audit-log-repo-renames output', () => {
+      expect(
+        parseAuditRepoRenameExport(
+          [
+            'renamed_at,original_repository_name,new_repository_name,actor',
+            '2026-01-01T00:00:00.000Z,acme-software/one,acme-software/renamed,octocat',
+          ].join('\n'),
+          'renames',
+        ),
+      ).toEqual([
+        {
+          renamedAt: '2026-01-01T00:00:00.000Z',
+          originalRepositoryName: 'acme-software/one',
+          newRepositoryName: 'acme-software/renamed',
+          actor: 'octocat',
+        },
+      ]);
+    });
+
+    it('accepts a header-only rename export', () => {
+      expect(
+        parseAuditRepoRenameExport(
+          'renamed_at,original_repository_name,new_repository_name,actor\n',
+          'renames',
+        ),
+      ).toEqual([]);
+    });
+  });
+
   it('canonicalizes target duplicates and retains conflicting rows', () => {
     const result = parseAuditTargetExport(
       targetCsv([
@@ -231,6 +262,116 @@ function targetRepo(overrides: Partial<AuditTargetRepo> = {}): AuditTargetRepo {
 }
 
 describe('buildAuditRecords', () => {
+  it('matches a renamed repository in the target organization and records the rename', () => {
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'one' })],
+      {
+        software: [
+          targetRepo({
+            organization: 'acme-software',
+            repositoryName: 'renamed',
+            url: 'https://github.com/acme-software/renamed',
+          }),
+        ],
+      },
+      {
+        repoRenames: [
+          {
+            renamedAt: '2026-01-01T00:00:00.000Z',
+            originalRepositoryName: 'acme-software/one',
+            newRepositoryName: 'acme-software/renamed',
+            actor: 'octocat',
+          },
+        ],
+      },
+    );
+
+    expect(records[0].matches).toEqual([
+      expect.objectContaining({
+        role: 'software',
+        organization: 'acme-software',
+        repositoryName: 'renamed',
+      }),
+    ]);
+    expect(records[0].notes).toContain('repository-renamed:one->renamed');
+    expect(records[0].notes).not.toContain(AUDIT_NOTES.SUCCESS_NO_MATCH);
+    expect(toAuditCsvRecord(records[0])).toMatchObject({
+      migrated_to_org: 'acme-software',
+      target_org: 'software',
+      notes: 'repository-renamed:one->renamed',
+    });
+  });
+
+  it('follows chained renames to the current target repository', () => {
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'one' })],
+      {
+        software: [
+          targetRepo({
+            organization: 'acme-software',
+            repositoryName: 'three',
+          }),
+        ],
+      },
+      {
+        repoRenames: [
+          {
+            renamedAt: '2026-01-01T00:00:00.000Z',
+            originalRepositoryName: 'acme-software/one',
+            newRepositoryName: 'acme-software/two',
+            actor: 'octocat',
+          },
+          {
+            renamedAt: '2026-02-01T00:00:00.000Z',
+            originalRepositoryName: 'acme-software/two',
+            newRepositoryName: 'acme-software/three',
+            actor: 'hubot',
+          },
+        ],
+      },
+    );
+
+    expect(records[0].matches[0].repositoryName).toBe('three');
+    expect(records[0].notes).toContain('repository-renamed:one->two->three');
+  });
+
+  it('uses rename history only when no direct target match exists', () => {
+    const records = buildAuditRecords(
+      [sourceRepo({ repositoryName: 'one' })],
+      {
+        software: [
+          targetRepo({
+            organization: 'acme-software',
+            repositoryName: 'one',
+          }),
+        ],
+        archive: [
+          targetRepo({
+            organization: 'acme-archive',
+            repositoryName: 'renamed-dova',
+          }),
+        ],
+      },
+      {
+        archiveSuffix: '-dova',
+        repoRenames: [
+          {
+            renamedAt: '2026-01-01T00:00:00.000Z',
+            originalRepositoryName: 'acme-archive/one',
+            newRepositoryName: 'acme-archive/renamed-dova',
+            actor: 'octocat',
+          },
+        ],
+      },
+    );
+
+    expect(records[0].matches).toHaveLength(1);
+    expect(records[0].matches[0].role).toBe('software');
+    expect(
+      records[0].notes.some((note) => note.startsWith('repository-renamed:')),
+    ).toBe(false);
+  });
+
   it('matches a repo found only in the software target', () => {
     const records = buildAuditRecords([sourceRepo()], {
       software: [targetRepo()],

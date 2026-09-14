@@ -76,6 +76,49 @@ describe('audit-org-repos command', () => {
     expect(fs.readFileSync(markdownFile, 'utf8')).toContain('## Summary');
   });
 
+  it('uses repository rename exports to resolve an otherwise missing target', async () => {
+    const directory = tempDir();
+    const sourceFile = writeFile(
+      directory,
+      'source.csv',
+      `${SOURCE_HEADERS}\nacme,one,https://github.com/acme/one,success,123,true\n`,
+    );
+    const softwareFile = writeFile(
+      directory,
+      'software.csv',
+      `${TARGET_HEADERS}\nacme-software,renamed,https://github.com/acme-software/renamed,private,false,2026-01-02T00:00:00Z,123\n`,
+    );
+    const renameFile = writeFile(
+      directory,
+      'renames.csv',
+      [
+        'renamed_at,original_repository_name,new_repository_name,actor',
+        '2026-01-03T00:00:00.000Z,acme-software/one,acme-software/renamed,octocat',
+      ].join('\n'),
+    );
+    const outputFile = path.join(directory, 'audit.csv');
+
+    await runCommand([
+      '--repo-list',
+      sourceFile,
+      '--target-repo-list',
+      `software=${softwareFile}`,
+      '--repo-rename-list',
+      renameFile,
+      '--output-file',
+      outputFile,
+    ]);
+
+    const csv = fs.readFileSync(outputFile, 'utf8');
+    expect(csv).toContain('acme-software,software');
+    expect(csv).toContain('repository-renamed:one->renamed');
+    const markdown = fs.readFileSync(path.join(directory, 'audit.md'), 'utf8');
+    expect(markdown).toContain(
+      '[renamed](https://github.com/acme-software/renamed)',
+    );
+    expect(markdown).toContain('repository-renamed:one-\\>renamed');
+  });
+
   it('warns, reports, and continues when a target export has duplicate rows', async () => {
     const directory = tempDir();
     const sourceFile = writeFile(
