@@ -6,6 +6,7 @@ import {
   collectTargetRepoList,
   deriveMarkdownPath,
   parseAuditSourceExport,
+  parseAuditRepoRenameExport,
   parseAuditTargetExport,
   renderAuditCsv,
   renderAuditMarkdown,
@@ -18,7 +19,7 @@ import {
   type TargetRole,
 } from '../utils/audit-repos.js';
 import { ensureOutputPathWritable } from '../utils/csv.js';
-import { parseBooleanOption } from './command-helpers.js';
+import { collectOption, parseBooleanOption } from './command-helpers.js';
 
 function warnAboutDuplicates<T>(
   duplicateGroups: AuditDuplicateGroup<T>[],
@@ -40,6 +41,15 @@ function warnAboutDuplicates<T>(
 const auditOrgReposCommand = new Command('audit-org-repos')
   .description(
     'Audit a source organization repository export against software/archive migration target exports (all produced by list-org-repos), and write a combined CSV plus a human-readable Markdown report',
+  )
+  .addOption(
+    new Option(
+      '--repo-rename-list <file>',
+      'Path to a list-audit-log-repo-renames CSV export; repeat for multiple target organizations',
+    )
+      .env('REPO_RENAME_LIST')
+      .argParser(collectOption)
+      .default([] as string[]),
   )
   .addOption(
     new Option(
@@ -104,6 +114,9 @@ role=path (software and/or archive), plus --output-file. Nothing is written
 until every input and output path has been validated. --archive-suffix is
 required whenever an archive target is supplied.
 
+Use --repo-rename-list with one or more list-audit-log-repo-renames CSV files
+to resolve repositories that were renamed after reaching a target organization.
+
 Open secret scanning alert data comes from the has_open_secret_scan_alerts
 column produced by list-org-repos; exports without that column report
 "unknown". Pass --check-secret-scanning false to omit the data entirely.
@@ -152,6 +165,15 @@ column produced by list-org-repos; exports without that column report
       sourceFileLabel,
     );
     warnAboutDuplicates(source.duplicateGroups, sourceFileLabel);
+    const repoRenames = (options.repoRenameList as string[]).flatMap(
+      (renamePath) => {
+        const resolvedPath = path.resolve(renamePath);
+        return parseAuditRepoRenameExport(
+          fs.readFileSync(resolvedPath, 'utf8'),
+          `--repo-rename-list (${resolvedPath})`,
+        );
+      },
+    );
 
     const includeSecretScanning = options.checkSecretScanning !== false;
     if (includeSecretScanning && !source.hasSecretScanColumn) {
@@ -205,6 +227,7 @@ column produced by list-org-repos; exports without that column report
       sourceDuplicateGroups: source.duplicateGroups,
       targetDuplicateGroups,
       includeSecretScanning,
+      repoRenames,
       onWarning: (message) => console.warn(`Warning: ${message}`),
     });
     const summary = summarizeAuditRecords(records, duplicateReportGroups);

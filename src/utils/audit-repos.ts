@@ -1,4 +1,6 @@
 import path from 'path';
+import { URL } from 'url';
+import { parse } from 'csv-parse/sync';
 import {
   escapeCsvValue,
   parseCsvRecords,
@@ -27,6 +29,13 @@ export interface AuditTargetRepo {
   archived: boolean | undefined;
   createdAt: string;
   migrationIssue: string;
+}
+
+export interface AuditRepoRename {
+  renamedAt: string;
+  originalRepositoryName: string;
+  newRepositoryName: string;
+  actor: string;
 }
 
 export interface AuditDuplicateGroup<T> {
@@ -264,6 +273,64 @@ export function parseAuditTargetExport(
   };
 }
 
+export function parseAuditRepoRenameExport(
+  contents: string,
+  fileLabel: string,
+): AuditRepoRename[] {
+  const headerRows = parse(contents, {
+    bom: true,
+    to_line: 1,
+    trim: true,
+  }) as string[][];
+  const headers = headerRows[0] ?? [];
+  const requiredHeaders = [
+    'renamed_at',
+    'original_repository_name',
+    'new_repository_name',
+    'actor',
+  ];
+  const missingHeaders = requiredHeaders.filter(
+    (header) => !headers.includes(header),
+  );
+  if (missingHeaders.length > 0) {
+    throw new Error(
+      `${fileLabel} is missing required column(s): ${missingHeaders.join(', ')}`,
+    );
+  }
+
+  const records = parseCsvRecords(contents);
+  if (records.length === 0) {
+    return [];
+  }
+
+  return records.map((record, index) => {
+    const renamedAt = record.renamed_at?.trim() ?? '';
+    const originalRepositoryName =
+      record.original_repository_name?.trim() ?? '';
+    const newRepositoryName = record.new_repository_name?.trim() ?? '';
+    const actor = record.actor?.trim() ?? '';
+    if (!renamedAt || !originalRepositoryName || !newRepositoryName || !actor) {
+      throw new Error(
+        `${fileLabel} row ${index + 2} contains a blank required rename value`,
+      );
+    }
+    if (
+      !originalRepositoryName.includes('/') ||
+      !newRepositoryName.includes('/')
+    ) {
+      throw new Error(
+        `${fileLabel} row ${index + 2} must use organization/repository names`,
+      );
+    }
+    return {
+      renamedAt,
+      originalRepositoryName,
+      newRepositoryName,
+      actor,
+    };
+  });
+}
+
 export interface TargetRepoListEntry {
   role: TargetRole;
   path: string;
@@ -391,6 +458,106 @@ export interface BuildAuditRecordsOptions {
    * ignored entirely (no value on the record, no note).
    */
   includeSecretScanning?: boolean;
+  repoRenames?: AuditRepoRename[];
+}
+
+interface RenamedTargetMatch {
+  target: AuditTargetRepo;
+  names: string[];
+}
+
+type RenameIndex = Map<string, AuditRepoRename[]>;
+
+function buildRenameIndex(repoRenames: AuditRepoRename[]): RenameIndex {
+  const renamesByOriginal: RenameIndex = new Map();
+  for (const rename of repoRenames) {
+    const originalKey = normalizeName(rename.originalRepositoryName);
+    const entries = renamesByOriginal.get(originalKey) ?? [];
+    entries.push(rename);
+    renamesByOriginal.set(originalKey, entries);
+  }
+  return renamesByOriginal;
+}
+
+function splitRepositoryFullName(
+  fullName: string,
+): { organization: string; repositoryName: string } | undefined {
+  const separator = fullName.indexOf('/');
+  if (separator <= 0 || separator === fullName.length - 1) {
+    return undefined;
+  }
+  return {
+    organization: fullName.slice(0, separator),
+    repositoryName: fullName.slice(separator + 1),
+  };
+}
+
+function findRenamedTarget(
+  sourceRepositoryName: string,
+  targetOrganization: string | undefined,
+  targetLookup: Map<string, AuditTargetRepo> | undefined,
+  renamesByOriginal: RenameIndex,
+  archiveSuffix?: string,
+): RenamedTargetMatch | undefined {
+  if (!targetOrganization || !targetLookup) {
+    return undefined;
+  }
+
+  const organizationKey = normalizeName(targetOrganization);
+  const candidates: RenamedTargetMatch[] = [];
+  const startFullName = `${targetOrganization}/${sourceRepositoryName}`;
+  const pending = (
+    renamesByOriginal.get(normalizeName(startFullName)) ?? []
+  ).map((rename) => ({
+    fullName: rename.newRepositoryName,
+    names: [sourceRepositoryName],
+    visited: new Set([normalizeName(startFullName)]),
+  }));
+
+  while (pending.length > 0) {
+    const currentState = pending.shift();
+    if (!currentState) {
+      break;
+    }
+    const current = splitRepositoryFullName(currentState.fullName);
+    const currentKey = normalizeName(currentState.fullName);
+    if (
+      !current ||
+      normalizeName(current.organization) !== organizationKey ||
+      currentState.visited.has(currentKey)
+    ) {
+      continue;
+    }
+
+    const names = [...currentState.names, current.repositoryName];
+    const visited = new Set(currentState.visited).add(currentKey);
+    const strippedName = archiveSuffix
+      ? stripArchiveSuffix(current.repositoryName, archiveSuffix)
+      : null;
+    const target = targetLookup.get(
+      normalizeName(strippedName ?? current.repositoryName),
+    );
+    if (target) {
+      candidates.push({ target, names });
+      continue;
+    }
+
+    for (const next of renamesByOriginal.get(currentKey) ?? []) {
+      pending.push({
+        fullName: next.newRepositoryName,
+        names,
+        visited,
+      });
+    }
+  }
+
+  const uniqueMatches = new Map(
+    candidates.map((candidate) => [
+      normalizeName(candidate.target.repositoryName),
+      candidate,
+    ]),
+  );
+  return uniqueMatches.size === 1 ? [...uniqueMatches.values()][0] : undefined;
 }
 
 /**
@@ -437,6 +604,10 @@ export function buildAuditRecords(
         options.onWarning,
       )
     : undefined;
+  const repoRenames = options.repoRenames ?? [];
+  const renameIndex = buildRenameIndex(repoRenames);
+  const softwareOrganization = targetsByRole.software?.[0]?.organization;
+  const archiveOrganization = targetsByRole.archive?.[0]?.organization;
 
   return source.map((repo) => {
     const key = normalizeName(repo.repositoryName);
@@ -446,7 +617,18 @@ export function buildAuditRecords(
       notes.push(AUDIT_NOTES.DUPLICATE_SOURCE);
     }
 
-    const softwareMatch = softwareLookup?.get(key);
+    const directSoftwareMatch = softwareLookup?.get(key);
+    const directArchiveMatch = archiveLookup?.get(key);
+    const hasDirectTarget = Boolean(directSoftwareMatch || directArchiveMatch);
+    const renamedSoftwareMatch = hasDirectTarget
+      ? undefined
+      : findRenamedTarget(
+          repo.repositoryName,
+          softwareOrganization,
+          softwareLookup,
+          renameIndex,
+        );
+    const softwareMatch = directSoftwareMatch ?? renamedSoftwareMatch?.target;
     if (softwareMatch) {
       matches.push({
         role: 'software',
@@ -462,6 +644,11 @@ export function buildAuditRecords(
       ) {
         notes.push(AUDIT_NOTES.DUPLICATE_SOFTWARE_TARGET);
       }
+      if (renamedSoftwareMatch) {
+        notes.push(
+          `repository-renamed:${renamedSoftwareMatch.names.join('->')}`,
+        );
+      }
       const sourceIssue = repo.migrationIssue;
       const targetIssue = softwareMatch.migrationIssue;
       if (sourceIssue && targetIssue && sourceIssue !== targetIssue) {
@@ -469,7 +656,16 @@ export function buildAuditRecords(
       }
     }
 
-    const archiveMatch = archiveLookup?.get(key);
+    const renamedArchiveMatch = hasDirectTarget
+      ? undefined
+      : findRenamedTarget(
+          repo.repositoryName,
+          archiveOrganization,
+          archiveLookup,
+          renameIndex,
+          options.archiveSuffix,
+        );
+    const archiveMatch = directArchiveMatch ?? renamedArchiveMatch?.target;
     if (archiveMatch) {
       matches.push({
         role: 'archive',
@@ -480,8 +676,20 @@ export function buildAuditRecords(
         archived: archiveMatch.archived,
         createdAt: archiveMatch.createdAt,
       });
-      if (archiveDuplicateNames.has(key)) {
+      const archiveMatchName =
+        options.archiveSuffix &&
+        stripArchiveSuffix(archiveMatch.repositoryName, options.archiveSuffix);
+      if (
+        archiveDuplicateNames.has(
+          normalizeName(archiveMatchName ?? archiveMatch.repositoryName),
+        )
+      ) {
         notes.push(AUDIT_NOTES.DUPLICATE_ARCHIVE_TARGET);
+      }
+      if (renamedArchiveMatch) {
+        notes.push(
+          `repository-renamed:${renamedArchiveMatch.names.join('->')}`,
+        );
       }
     }
 

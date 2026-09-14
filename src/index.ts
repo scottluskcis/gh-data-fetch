@@ -19,6 +19,7 @@ import getOrgRepoCustomPropertiesCommand from './commands/get-org-repo-custom-pr
 import auditOrgReposCommand from './commands/audit-org-repos.js';
 import listEnterpriseOrgsCommand from './commands/list-enterprise-orgs.js';
 import listOrgReposCommand from './commands/list-org-repos.js';
+import listAuditLogRepoRenamesCommand from './commands/list-audit-log-repo-renames.js';
 import parseReposFromCsvCommand from './commands/parse-repos-from-csv.js';
 
 const program = createProgram({
@@ -31,6 +32,7 @@ const program = createProgram({
     getRepoReleaseSizesCommand,
     getAssigneeIssues,
     listOrgMigrationsCommand,
+    listAuditLogRepoRenamesCommand,
     listEnterpriseOrgsCommand,
     listOrgReposCommand,
     unlockOrgRepositoryCommand,
