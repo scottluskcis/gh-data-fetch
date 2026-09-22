@@ -67,6 +67,7 @@ export function deriveEffectiveAccess(options: {
   }
   if (
     options.organizationMember &&
+    options.organizationBasePermission !== undefined &&
     options.organizationBasePermission !== 'none'
   ) {
     routes.push(
@@ -99,6 +100,7 @@ export function deriveEffectiveAccess(options: {
   }
   if (
     options.organizationMember &&
+    options.organizationBasePermission !== undefined &&
     options.organizationBasePermission !== 'none'
   ) {
     return {
@@ -423,8 +425,7 @@ classic token typically needs repo and read:org scopes.
                 role: access.role,
                 routes: access.hasAccess === 'no' ? ['none'] : ['unknown'],
                 attributionComplete:
-                  access.hasAccess === 'no' &&
-                  organizationAttributionAvailable,
+                  access.hasAccess === 'no' && organizationAttributionAvailable,
                 error: '',
               });
               continue;
