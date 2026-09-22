@@ -29,6 +29,7 @@
         "get-org-repo-custom-properties",
         "get-package-details",
         "get-repo-release-sizes",
+        "get-user-repo-access",
         "list-audit-log-repo-renames",
         "list-enterprise-orgs",
         "list-org-migrations",
