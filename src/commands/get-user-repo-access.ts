@@ -42,6 +42,74 @@ export interface RepositoryAccessResult {
   error: string;
 }
 
+interface EffectiveAccess {
+  hasAccess: boolean;
+  permission: string;
+  role: string;
+  routes: string[];
+}
+
+interface TeamMembershipResult {
+  active: boolean;
+  complete: boolean;
+}
+
+export function deriveEffectiveAccess(options: {
+  collaboratorPermission: string;
+  collaboratorRole?: string | null;
+  repositoryPrivate: boolean;
+  organizationMember: boolean;
+  organizationBasePermission: string;
+}): EffectiveAccess {
+  const routes: string[] = [];
+  if (!options.repositoryPrivate) {
+    routes.push('public repository');
+  }
+  if (
+    options.organizationMember &&
+    options.organizationBasePermission !== 'none'
+  ) {
+    routes.push(
+      `organization base permission (${options.organizationBasePermission})`,
+    );
+  }
+
+  const implicitPermission =
+    options.organizationMember && options.organizationBasePermission !== 'none'
+      ? options.organizationBasePermission
+      : !options.repositoryPrivate
+        ? 'read'
+        : 'none';
+  const permission =
+    options.collaboratorPermission !== 'none'
+      ? options.collaboratorPermission
+      : implicitPermission;
+
+  return {
+    hasAccess: permission !== 'none',
+    permission,
+    role:
+      options.collaboratorPermission !== 'none'
+        ? (options.collaboratorRole ?? options.collaboratorPermission)
+        : permission,
+    routes,
+  };
+}
+
+export async function getCachedTeamMembership(
+  cache: Map<string, Promise<TeamMembershipResult>>,
+  teamSlug: string,
+  fetchMembership: () => Promise<TeamMembershipResult>,
+): Promise<TeamMembershipResult> {
+  const cacheKey = teamSlug.toLowerCase();
+  let membership = cache.get(cacheKey);
+  if (!membership) {
+    membership = fetchMembership();
+    cache.set(cacheKey, membership);
+  }
+  return membership;
+}
+
 function uniqueCaseInsensitive(values: string[]): string[] {
   const seen = new Set<string>();
   return values.filter((value) => {
@@ -284,6 +352,11 @@ classic token typically needs repo and read:org scopes.
           }
         }
 
+        const teamMembershipCache = new Map<
+          string,
+          Promise<TeamMembershipResult>
+        >();
+
         for (const repository of repositories) {
           try {
             const repositoryDetails = await executeApiOperation(
@@ -312,27 +385,17 @@ classic token typically needs repo and read:org scopes.
               logger,
               `Fetching effective permission for ${options.username} on ${repository}`,
             );
-            const effectivePermission = permissionResponse.data.permission;
-            const role =
-              permissionResponse.data.user?.role_name ?? effectivePermission;
-            const hasAccess = effectivePermission !== 'none';
-            const routes: string[] = [];
+            const access = deriveEffectiveAccess({
+              collaboratorPermission: permissionResponse.data.permission,
+              collaboratorRole: permissionResponse.data.user?.role_name,
+              repositoryPrivate: repositoryDetails.data.private,
+              organizationMember,
+              organizationBasePermission,
+            });
+            const routes = [...access.routes];
             let attributionComplete = organizationAttributionAvailable;
 
-            if (!repositoryDetails.data.private && hasAccess) {
-              routes.push('public repository');
-            }
-            if (
-              organizationMember &&
-              organizationBasePermission !== 'none' &&
-              hasAccess
-            ) {
-              routes.push(
-                `organization base permission (${organizationBasePermission})`,
-              );
-            }
-
-            if (!hasAccess) {
+            if (!access.hasAccess) {
               results.push({
                 organization,
                 repository,
@@ -407,32 +470,46 @@ classic token typically needs repo and read:org scopes.
                   `Fetching teams for ${repository}, page ${page}`,
                 );
                 for (const team of teams.data) {
-                  try {
-                    const membership = await executeApiOperation(
-                      () =>
-                        octokit.request(
-                          'GET /orgs/{org}/teams/{team_slug}/memberships/{username}',
-                          {
-                            org: organization,
-                            team_slug: team.slug,
-                            username: options.username,
-                          },
-                        ),
-                      retryConfig,
-                      retryDisabled,
-                      logger,
-                      `Checking ${options.username} membership in ${team.slug}`,
-                    );
-                    if (membership.data.state === 'active') {
-                      routes.push(`team:${team.slug} (${team.permission})`);
-                    }
-                  } catch (error: unknown) {
-                    if (errorStatus(error) !== 404) {
-                      attributionComplete = false;
-                      logger.warn(
-                        `Could not inspect membership in ${team.slug}: ${errorMessage(error)}`,
-                      );
-                    }
+                  const membership = await getCachedTeamMembership(
+                    teamMembershipCache,
+                    team.slug,
+                    async () => {
+                      try {
+                        const response = await executeApiOperation(
+                          () =>
+                            octokit.request(
+                              'GET /orgs/{org}/teams/{team_slug}/memberships/{username}',
+                              {
+                                org: organization,
+                                team_slug: team.slug,
+                                username: options.username,
+                              },
+                            ),
+                          retryConfig,
+                          retryDisabled,
+                          logger,
+                          `Checking ${options.username} membership in ${team.slug}`,
+                        );
+                        return {
+                          active: response.data.state === 'active',
+                          complete: true,
+                        };
+                      } catch (error: unknown) {
+                        if (errorStatus(error) === 404) {
+                          return { active: false, complete: true };
+                        }
+                        logger.warn(
+                          `Could not inspect membership in ${team.slug}: ${errorMessage(error)}`,
+                        );
+                        return { active: false, complete: false };
+                      }
+                    },
+                  );
+                  if (membership.active) {
+                    routes.push(`team:${team.slug} (${team.permission})`);
+                  }
+                  if (!membership.complete) {
+                    attributionComplete = false;
                   }
                 }
                 if (teams.data.length < 100) {
@@ -452,14 +529,12 @@ classic token typically needs repo and read:org scopes.
               repository,
               username: options.username,
               status: 'success',
-              hasAccess: hasAccess ? 'yes' : 'no',
-              effectivePermission: hasAccess ? effectivePermission : 'none',
-              role: hasAccess ? role : 'none',
-              routes: hasAccess
-                ? uniqueCaseInsensitive(
-                    routes.length > 0 ? routes : ['unknown'],
-                  )
-                : ['none'],
+              hasAccess: 'yes',
+              effectivePermission: access.permission,
+              role: access.role,
+              routes: uniqueCaseInsensitive(
+                routes.length > 0 ? routes : ['unknown'],
+              ),
               attributionComplete,
               error: '',
             });

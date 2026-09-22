@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deriveEffectiveAccess,
+  getCachedTeamMembership,
   parseRepositoryNames,
   renderAccessCsv,
   renderAccessMarkdown,
@@ -70,5 +72,51 @@ describe('get-user-repo-access command helpers', () => {
       { ...result, status: 'error', error: 'first | second' },
     ]);
     expect(markdown).toContain('first \\| second');
+  });
+
+  it('derives read access from public repository visibility', () => {
+    expect(
+      deriveEffectiveAccess({
+        collaboratorPermission: 'none',
+        repositoryPrivate: false,
+        organizationMember: false,
+        organizationBasePermission: 'none',
+      }),
+    ).toEqual({
+      hasAccess: true,
+      permission: 'read',
+      role: 'read',
+      routes: ['public repository'],
+    });
+  });
+
+  it('derives access from the organization base permission', () => {
+    expect(
+      deriveEffectiveAccess({
+        collaboratorPermission: 'none',
+        repositoryPrivate: true,
+        organizationMember: true,
+        organizationBasePermission: 'write',
+      }),
+    ).toEqual({
+      hasAccess: true,
+      permission: 'write',
+      role: 'write',
+      routes: ['organization base permission (write)'],
+    });
+  });
+
+  it('caches team membership by case-insensitive team slug', async () => {
+    const cache = new Map();
+    let requests = 0;
+    const fetchMembership = async () => {
+      requests++;
+      return { active: true, complete: true };
+    };
+
+    await getCachedTeamMembership(cache, 'Developers', fetchMembership);
+    await getCachedTeamMembership(cache, 'developers', fetchMembership);
+
+    expect(requests).toBe(1);
   });
 });
