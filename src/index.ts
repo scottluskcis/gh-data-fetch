@@ -21,6 +21,7 @@ import listEnterpriseOrgsCommand from './commands/list-enterprise-orgs.js';
 import listOrgReposCommand from './commands/list-org-repos.js';
 import listAuditLogRepoRenamesCommand from './commands/list-audit-log-repo-renames.js';
 import parseReposFromCsvCommand from './commands/parse-repos-from-csv.js';
+import getUserRepoAccessCommand from './commands/get-user-repo-access.js';
 
 const program = createProgram({
   name: 'octokit-sandbox',
@@ -30,6 +31,7 @@ const program = createProgram({
     getIssueByIdCommand,
     getPackageDetailsCommand,
     getRepoReleaseSizesCommand,
+    getUserRepoAccessCommand,
     getAssigneeIssues,
     listOrgMigrationsCommand,
     listAuditLogRepoRenamesCommand,
