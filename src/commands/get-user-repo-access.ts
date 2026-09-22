@@ -43,7 +43,7 @@ export interface RepositoryAccessResult {
 }
 
 interface EffectiveAccess {
-  hasAccess: boolean;
+  hasAccess: RepositoryAccessResult['hasAccess'];
   permission: string;
   role: string;
   routes: string[];
@@ -58,8 +58,8 @@ export function deriveEffectiveAccess(options: {
   collaboratorPermission: string;
   collaboratorRole?: string | null;
   repositoryPrivate: boolean;
-  organizationMember: boolean;
-  organizationBasePermission: string;
+  organizationMember: boolean | undefined;
+  organizationBasePermission: string | undefined;
 }): EffectiveAccess {
   const routes: string[] = [];
   if (!options.repositoryPrivate) {
@@ -74,26 +74,41 @@ export function deriveEffectiveAccess(options: {
     );
   }
 
-  const implicitPermission =
-    options.organizationMember && options.organizationBasePermission !== 'none'
-      ? options.organizationBasePermission
-      : !options.repositoryPrivate
-        ? 'read'
-        : 'none';
-  const permission =
-    options.collaboratorPermission !== 'none'
-      ? options.collaboratorPermission
-      : implicitPermission;
-
-  return {
-    hasAccess: permission !== 'none',
-    permission,
-    role:
-      options.collaboratorPermission !== 'none'
-        ? (options.collaboratorRole ?? options.collaboratorPermission)
-        : permission,
-    routes,
-  };
+  if (options.collaboratorPermission !== 'none') {
+    return {
+      hasAccess: 'yes',
+      permission: options.collaboratorPermission,
+      role: options.collaboratorRole ?? options.collaboratorPermission,
+      routes,
+    };
+  }
+  if (!options.repositoryPrivate) {
+    return { hasAccess: 'yes', permission: 'read', role: 'read', routes };
+  }
+  if (
+    options.organizationMember === undefined ||
+    (options.organizationMember &&
+      options.organizationBasePermission === undefined)
+  ) {
+    return {
+      hasAccess: 'unknown',
+      permission: 'unknown',
+      role: 'unknown',
+      routes: ['unknown'],
+    };
+  }
+  if (
+    options.organizationMember &&
+    options.organizationBasePermission !== 'none'
+  ) {
+    return {
+      hasAccess: 'yes',
+      permission: options.organizationBasePermission,
+      role: options.organizationBasePermission,
+      routes,
+    };
+  }
+  return { hasAccess: 'no', permission: 'none', role: 'none', routes: [] };
 }
 
 export async function getCachedTeamMembership(
@@ -307,8 +322,8 @@ classic token typically needs repo and read:org scopes.
           `Validating user ${options.username}`,
         );
 
-        let organizationMember = false;
-        let organizationBasePermission = 'none';
+        let organizationMember: boolean | undefined;
+        let organizationBasePermission: string | undefined;
         let organizationAttributionAvailable = true;
 
         try {
@@ -325,7 +340,9 @@ classic token typically needs repo and read:org scopes.
           );
           organizationMember = membership.data.state === 'active';
         } catch (error: unknown) {
-          if (errorStatus(error) !== 404) {
+          if (errorStatus(error) === 404) {
+            organizationMember = false;
+          } else {
             organizationAttributionAvailable = false;
             logger.warn(
               `Could not inspect organization membership for ${options.username}: ${errorMessage(error)}`,
@@ -395,17 +412,19 @@ classic token typically needs repo and read:org scopes.
             const routes = [...access.routes];
             let attributionComplete = organizationAttributionAvailable;
 
-            if (!access.hasAccess) {
+            if (access.hasAccess !== 'yes') {
               results.push({
                 organization,
                 repository,
                 username: options.username,
                 status: 'success',
-                hasAccess: 'no',
-                effectivePermission: 'none',
-                role: 'none',
-                routes: ['none'],
-                attributionComplete: true,
+                hasAccess: access.hasAccess,
+                effectivePermission: access.permission,
+                role: access.role,
+                routes: access.hasAccess === 'no' ? ['none'] : ['unknown'],
+                attributionComplete:
+                  access.hasAccess === 'no' &&
+                  organizationAttributionAvailable,
                 error: '',
               });
               continue;
@@ -437,7 +456,7 @@ classic token typically needs repo and read:org scopes.
                 if (collaborator) {
                   const directRole = collaborator.role_name ?? 'unknown';
                   routes.push(
-                    `${organizationMember ? 'direct collaborator' : 'outside collaborator'} (${directRole})`,
+                    `${organizationMember === true ? 'direct collaborator' : organizationMember === false ? 'outside collaborator' : 'direct or outside collaborator'} (${directRole})`,
                   );
                   foundDirectGrant = true;
                 }

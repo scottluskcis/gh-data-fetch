@@ -83,7 +83,7 @@ describe('get-user-repo-access command helpers', () => {
         organizationBasePermission: 'none',
       }),
     ).toEqual({
-      hasAccess: true,
+      hasAccess: 'yes',
       permission: 'read',
       role: 'read',
       routes: ['public repository'],
@@ -99,10 +99,26 @@ describe('get-user-repo-access command helpers', () => {
         organizationBasePermission: 'write',
       }),
     ).toEqual({
-      hasAccess: true,
+      hasAccess: 'yes',
       permission: 'write',
       role: 'write',
       routes: ['organization base permission (write)'],
+    });
+  });
+
+  it('reports unknown access when organization membership cannot be determined', () => {
+    expect(
+      deriveEffectiveAccess({
+        collaboratorPermission: 'none',
+        repositoryPrivate: true,
+        organizationMember: undefined,
+        organizationBasePermission: undefined,
+      }),
+    ).toEqual({
+      hasAccess: 'unknown',
+      permission: 'unknown',
+      role: 'unknown',
+      routes: ['unknown'],
     });
   });
 
